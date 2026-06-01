@@ -16,6 +16,8 @@ from .models import (
     FILTER_VISIBLE_CHIPS,
     NO_COLUMN,
     NUMERIC_FILTERS,
+    PATH_STYLE_AUTO,
+    PATH_STYLE_CHOICES,
     VALUELESS_FILTERS,
     FilterClause,
     ImportProfile,
@@ -40,6 +42,9 @@ class ImportDialog(tk.Toplevel):
         self.full_path_var = tk.StringVar(value=self.profile.full_path_column or best_column(headers, ("Full Path", "Path", "Pfad", "Dateipfad")))
         self.folder_var = tk.StringVar(value=self.profile.folder_column or best_column(headers, ("Folder", "Directory", "Parent Path", "Ordner")))
         self.filename_var = tk.StringVar(value=self.profile.filename_column or best_column(headers, ("Filename", "File Name", "Name", "Dateiname")))
+        self.path_style_values = {label: value for label, value in PATH_STYLE_CHOICES}
+        self.path_style_labels = {value: label for label, value in PATH_STYLE_CHOICES}
+        self.path_style_var = tk.StringVar(value=self.path_style_labels.get(self.profile.path_style or PATH_STYLE_AUTO, "Auto detect"))
         self.current_columns = self.initial_metadata_columns(selected_metadata)
         self.all_column_headers = []
 
@@ -98,11 +103,12 @@ class ImportDialog(tk.Toplevel):
         self._combo_row(outer, 1, "Full path column", self.full_path_var)
         self._combo_row(outer, 2, "Folder/path column", self.folder_var)
         self._combo_row(outer, 3, "Filename column", self.filename_var)
+        self._path_style_row(outer, 4)
 
-        ttk.Label(outer, text="Columns").grid(row=4, column=0, sticky="nw", pady=(14, 0))
+        ttk.Label(outer, text="Columns").grid(row=5, column=0, sticky="nw", pady=(14, 0))
 
         columns_frame = ttk.Frame(outer, style="Panel.TFrame")
-        columns_frame.grid(row=4, column=1, rowspan=2, sticky="nsew", pady=(14, 0))
+        columns_frame.grid(row=5, column=1, rowspan=2, sticky="nsew", pady=(14, 0))
         columns_frame.columnconfigure(0, weight=1)
         columns_frame.columnconfigure(2, weight=1)
         columns_frame.rowconfigure(1, weight=1)
@@ -141,7 +147,7 @@ class ImportDialog(tk.Toplevel):
         ttk.Button(order_buttons, text="v", width=4, command=lambda: self.move_current_columns(1)).pack()
 
         button_row = ttk.Frame(outer)
-        button_row.grid(row=6, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        button_row.grid(row=7, column=0, columnspan=2, sticky="e", pady=(14, 0))
         ttk.Button(button_row, text="Cancel", command=self.cancel).pack(side="right")
         ttk.Button(button_row, text=self.action_label, command=self.accept, style="Accent.TButton").pack(side="right", padx=(0, 8))
 
@@ -166,6 +172,17 @@ class ImportDialog(tk.Toplevel):
         combo.grid(row=row, column=1, sticky="ew", pady=4)
         if not variable.get():
             variable.set(NO_COLUMN)
+
+    def _path_style_row(self, parent, row):
+        ttk.Label(parent, text="Path style").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 12))
+        combo = ttk.Combobox(
+            parent,
+            textvariable=self.path_style_var,
+            values=[label for label, _value in PATH_STYLE_CHOICES],
+            width=46,
+            state="readonly",
+        )
+        combo.grid(row=row, column=1, sticky="ew", pady=4)
 
     def refresh_column_lists(self, selected_current=()):
         current_set = set(self.current_columns)
@@ -245,7 +262,8 @@ class ImportDialog(tk.Toplevel):
             for header in metadata
             if (unit := existing_units.get(header) or detect_size_unit(header)) and unit != "ask"
         }
-        self.result = ImportProfile(full_path, folder, filename, metadata, size_units)
+        path_style = self.path_style_values.get(self.path_style_var.get(), PATH_STYLE_AUTO)
+        self.result = ImportProfile(full_path, folder, filename, metadata, size_units, path_style=path_style)
         self.destroy()
 
     def cancel(self):

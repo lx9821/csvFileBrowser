@@ -12,6 +12,7 @@ from .dialogs import ColumnFilterDialog, CompareDetailWindow, CompareRootDialog,
 from .icons import load_icons, set_window_icon
 from .models import *
 from .parsing import detect_import_profile, file_md5, is_ftk_listing, read_csv_rows, read_tree_listing
+from .profile_store import load_import_profile, save_import_profile
 from .utils import *
 
 class FileBrowser(tk.Tk):
@@ -70,6 +71,8 @@ class FileBrowser(tk.Tk):
         self.detail_number_width = DETAIL_NUMBER_MIN_WIDTH
         self.detail_number_icon_offset = 0
         self.compare_detail_window = None
+        self.import_warnings = []
+        self.saved_profile_name = ""
 
         self.icons = load_icons()
         self.status_var = tk.StringVar(value="Select a CSV or tree text file to start.")
@@ -505,8 +508,14 @@ class FileBrowser(tk.Tk):
             return
         self.clear_busy()
 
-        profile = detect_import_profile(headers)
-        if profile is None or not is_ftk_listing(headers):
+        profile, saved_profile = load_import_profile(headers)
+        self.saved_profile_name = ""
+        if profile:
+            self.saved_profile_name = (saved_profile or {}).get("name") or "Saved import profile"
+        else:
+            profile = detect_import_profile(headers)
+
+        if not self.saved_profile_name and (profile is None or not is_ftk_listing(headers)):
             dialog = ImportDialog(self, headers, profile=profile, action_label="Import")
             self.wait_window(dialog)
             if not dialog.result:
@@ -523,18 +532,62 @@ class FileBrowser(tk.Tk):
         self.column_filters.clear()
         if self.search_var.get():
             self.search_var.set("")
+        self.apply_path_style_detection(profile, rows)
         if not self.resolve_size_units():
             return
+        self.save_current_import_profile(file_name)
         self.set_busy(f"Building view for {file_name}...", overlay=True)
         self.metadata_columns = list(profile.metadata_columns)
         self.rebuild()
         self.show_browser()
         self.file_title_var.set(file_name)
         self.file_md5_var.set(f"MD5: {csv_md5}")
+        self.show_import_warnings()
 
         delimiter_name = {"\t": "tab", ",": "comma", ";": "semicolon", "|": "pipe"}.get(delimiter, delimiter)
-        self.status_var.set(f"Loaded {file_name}: {len(rows):,} rows, {encoding}, {delimiter_name} delimiter.")
+        profile_note = " Saved profile applied." if self.saved_profile_name else ""
+        warning_note = f" Import warnings: {self.warning_count()}." if self.warning_count() else ""
+        self.status_var.set(
+            f"Loaded {file_name}: {len(rows):,} rows, {encoding}, {delimiter_name} delimiter. "
+            f"Path style: {path_style_label(profile.path_style)}.{profile_note}{warning_note}"
+        )
         self.clear_busy()
+
+    def csv_path_values(self, rows, profile):
+        values = []
+        for row in rows:
+            if profile.full_path_column:
+                value = clean_cell(row.get(profile.full_path_column))
+            else:
+                folder = clean_cell(row.get(profile.folder_column)) if profile.folder_column else ""
+                name = clean_cell(row.get(profile.filename_column)) if profile.filename_column else ""
+                trimmed_folder = folder.rstrip("/\\")
+                value = f"{trimmed_folder}/{name}" if trimmed_folder and name else name or folder
+            if value:
+                values.append(value)
+        return values
+
+    def apply_path_style_detection(self, profile, rows):
+        resolved_style, warnings, _stats = path_style_warnings(self.csv_path_values(rows, profile), profile.path_style)
+        profile.path_style = resolved_style
+        self.import_warnings = warnings
+
+    def warning_count(self):
+        return sum(1 for warning in self.import_warnings if not warning.startswith("Path style auto-detected"))
+
+    def show_import_warnings(self):
+        important = [warning for warning in self.import_warnings if not warning.startswith("Path style auto-detected")]
+        if important:
+            messagebox.showwarning("Import warnings", "\n\n".join(self.import_warnings))
+
+    def save_current_import_profile(self, file_name):
+        if not self.headers or not self.profile:
+            return
+        profile_name = self.saved_profile_name or f"{os.path.splitext(file_name)[0]} import profile"
+        try:
+            save_import_profile(self.headers, self.profile, name=profile_name)
+        except OSError:
+            return
 
     def import_tree_listing(self, file_path):
         file_name = os.path.basename(file_path)
@@ -548,6 +601,8 @@ class FileBrowser(tk.Tk):
         self.profile = ImportProfile(size_units={})
         self.metadata_columns = []
         self.import_kind = "tree"
+        self.import_warnings = []
+        self.saved_profile_name = ""
         self.reset_compare_state()
         self.column_filters.clear()
         if self.search_var.get():
@@ -914,9 +969,12 @@ class FileBrowser(tk.Tk):
         self.wait_window(dialog)
         if dialog.result:
             self.profile = dialog.result
+            self.apply_path_style_detection(self.profile, self.rows)
             if not self.resolve_size_units():
                 return
             self.metadata_columns = list(dialog.result.metadata_columns)
+            self.save_current_import_profile(os.path.basename(self.current_file or "current_file"))
+            self.show_import_warnings()
             self.reset_compare_state()
             self.prune_column_filters()
             self.rebuild()
@@ -977,7 +1035,7 @@ class FileBrowser(tk.Tk):
             full_path = f"{folder}/{name}" if folder else name
             full_path = full_path.replace(" / ", "/")
 
-        normalized = normalize_path(full_path)
+        normalized = normalize_path(full_path, profile.path_style)
         if not normalized:
             return None
 

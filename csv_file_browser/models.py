@@ -31,6 +31,14 @@ FILTER_PRESET_VIDEOS = "Video files"
 FILTER_PRESET_OFFICE = "Office files"
 FILTER_PRESET_USER_DATA = "User data"
 FILTER_VISIBLE_CHIPS = 5
+PATH_STYLE_AUTO = "auto"
+PATH_STYLE_WINDOWS = "windows"
+PATH_STYLE_POSIX = "posix"
+PATH_STYLE_CHOICES = (
+    ("Auto detect", PATH_STYLE_AUTO),
+    ("Windows paths", PATH_STYLE_WINDOWS),
+    ("Linux/macOS paths", PATH_STYLE_POSIX),
+)
 
 COLORS = {
     "app_bg": "#f4f6f8",
@@ -79,6 +87,7 @@ class ImportProfile:
     filename_column: str = ""
     metadata_columns: tuple[str, ...] = ()
     size_units: Optional[dict] = None
+    path_style: str = PATH_STYLE_AUTO
 
 
 @dataclass

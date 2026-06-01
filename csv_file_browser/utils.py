@@ -1,5 +1,7 @@
 import posixpath
 
+from .models import PATH_STYLE_AUTO, PATH_STYLE_POSIX, PATH_STYLE_WINDOWS
+
 def clean_cell(value):
     if value is None:
         return ""
@@ -19,8 +21,10 @@ def split_filter_values(value):
     return values or [text]
 
 
-def normalize_path(path):
-    path = clean_cell(path).strip('"').replace("\\", "/")
+def normalize_path(path, path_style=PATH_STYLE_WINDOWS):
+    path = clean_cell(path).strip('"')
+    if path_style != PATH_STYLE_POSIX:
+        path = path.replace("\\", "/")
     while "//" in path:
         path = path.replace("//", "/")
     path = path.strip()
@@ -30,6 +34,124 @@ def normalize_path(path):
     if not path.startswith("/"):
         path = "/" + path
     return posixpath.normpath(path)
+
+
+def path_has_windows_drive(path):
+    text = clean_cell(path).strip('"')
+    return len(text) >= 3 and text[1] == ":" and text[0].isalpha() and text[2] in "\\/"
+
+
+def path_has_unc_prefix(path):
+    text = clean_cell(path).strip('"')
+    return text.startswith("\\\\") or text.startswith("//")
+
+
+def path_is_posix_absolute(path):
+    text = clean_cell(path).strip('"')
+    return text.startswith("/") and not text.startswith("//")
+
+
+def path_separator_stats(paths):
+    stats = {
+        "total": 0,
+        "slash": 0,
+        "backslash": 0,
+        "windows_drive": 0,
+        "unc": 0,
+        "posix_absolute": 0,
+        "mixed": 0,
+        "posix_with_backslash": 0,
+        "relative_with_backslash": 0,
+        "backslash_samples": [],
+        "mixed_samples": [],
+    }
+    for raw_path in paths:
+        text = clean_cell(raw_path).strip('"')
+        if not text:
+            continue
+        stats["total"] += 1
+        has_slash = "/" in text
+        has_backslash = "\\" in text
+        if has_slash:
+            stats["slash"] += 1
+        if has_backslash:
+            stats["backslash"] += 1
+            if len(stats["backslash_samples"]) < 3:
+                stats["backslash_samples"].append(text)
+        if has_slash and has_backslash:
+            stats["mixed"] += 1
+            if len(stats["mixed_samples"]) < 3:
+                stats["mixed_samples"].append(text)
+        if path_has_windows_drive(text):
+            stats["windows_drive"] += 1
+        if path_has_unc_prefix(text):
+            stats["unc"] += 1
+        if path_is_posix_absolute(text):
+            stats["posix_absolute"] += 1
+            if has_backslash:
+                stats["posix_with_backslash"] += 1
+        elif has_backslash and not path_has_windows_drive(text) and not path_has_unc_prefix(text):
+            stats["relative_with_backslash"] += 1
+    return stats
+
+
+def infer_path_style(paths):
+    stats = path_separator_stats(paths)
+    if stats["windows_drive"] or stats["unc"]:
+        return PATH_STYLE_WINDOWS, stats
+    if stats["posix_absolute"]:
+        return PATH_STYLE_POSIX, stats
+    if stats["backslash"] > stats["slash"]:
+        return PATH_STYLE_WINDOWS, stats
+    if stats["slash"] and not stats["backslash"]:
+        return PATH_STYLE_POSIX, stats
+    return PATH_STYLE_WINDOWS, stats
+
+
+def resolve_path_style(path_style, paths):
+    if path_style and path_style != PATH_STYLE_AUTO:
+        return path_style, path_separator_stats(paths)
+    return infer_path_style(paths)
+
+
+def path_style_label(path_style):
+    labels = {
+        PATH_STYLE_AUTO: "Auto detect",
+        PATH_STYLE_WINDOWS: "Windows paths",
+        PATH_STYLE_POSIX: "Linux/macOS paths",
+    }
+    return labels.get(path_style, "Auto detect")
+
+
+def path_style_warnings(paths, path_style=PATH_STYLE_AUTO):
+    resolved_style, stats = resolve_path_style(path_style, paths)
+    warnings = []
+    if not stats["total"]:
+        warnings.append("No path values were found in the selected path columns.")
+        return resolved_style, warnings, stats
+
+    if path_style == PATH_STYLE_AUTO:
+        warnings.append(f"Path style auto-detected as {path_style_label(resolved_style)}.")
+
+    if stats["mixed"]:
+        samples = "; ".join(stats["mixed_samples"])
+        warnings.append(f"{stats['mixed']:,} path(s) contain both '/' and '\\'. Example: {samples}")
+
+    if resolved_style == PATH_STYLE_POSIX and stats["posix_with_backslash"]:
+        samples = "; ".join(stats["backslash_samples"])
+        warnings.append(
+            f"{stats['posix_with_backslash']:,} POSIX-looking path(s) contain backslashes. "
+            f"Backslashes will be kept as filename characters. Example: {samples}"
+        )
+
+    if resolved_style == PATH_STYLE_WINDOWS and stats["relative_with_backslash"] and not stats["windows_drive"] and not stats["unc"]:
+        samples = "; ".join(stats["backslash_samples"])
+        warnings.append(
+            f"{stats['relative_with_backslash']:,} relative path(s) use backslashes without a drive or UNC prefix. "
+            f"They are treated as Windows separators. Example: {samples}"
+        )
+
+    return resolved_style, warnings, stats
 
 
 def parent_path(path):
