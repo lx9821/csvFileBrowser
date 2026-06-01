@@ -56,6 +56,8 @@ The `examples/` folder contains synthetic demo data that can be used for screens
 
 - `examples/ftk_sample_file_listing.csv` - FTK-style file listing with fictional custodians, Windows paths, metadata, deleted items, duplicates, browser artifacts, archives, images, and documents.
 
+![Example](https://github.com/lx9821/csvFileBrowser/blob/4cf22e3e3ee4b5d38e47c3e6e3e5bc5d904c11ec/examples/ExampleScreenshot.png)
+
 ## Run
 
 ```powershell
