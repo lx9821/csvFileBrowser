@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+build/
+dist/
+*.spec.bak
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+*.log
+
+# Local notes / reference material
+request.txt
+properties.txt
