@@ -1,52 +1,52 @@
 # CSV File Browser
 
-Ein kleines Tkinter-Tool zum Durchsuchen, Filtern und Vergleichen von CSV-basierten Dateilistings und Tree-Text-Exports. Es ist auf DFIR/eDiscovery-artige Dateilisten ausgelegt, kann aber auch normale CSV-Dateien mit frei gemappten Pfad- und Metadatenspalten laden.
+A small Tkinter desktop tool for browsing, filtering, and comparing CSV-based file listings and tree-text exports. It is designed for DFIR/eDiscovery-style file inventories, but it can also load regular CSV files with custom path and metadata column mappings.
 
-## Funktionen
+## Features
 
-- CSV-Import mit automatischer Erkennung typischer FTK-Listings
-- Manuelles Verwalten sichtbarer Spalten über **Manage columns**
-- Import von Tree-Text-Dateien und selbst kopierten Tree-Exports
-- Ordnernavigation mit Detailansicht, Suche, Filtern und Sortierung
-- Properties-Fenster per Doppelklick auf Dateien
-- Kopieren von Ordner-Trees wahlweise nur mit Ordnern oder mit Dateien
-- Vergleich zweier Imports mit Hervorhebung neuer, fehlender oder geänderter Elemente
-- Export der aktuellen Ansicht als CSV
+- CSV import with automatic detection for typical FTK listings
+- Manual visible-column management via **Manage columns**
+- Import for tree-text files and tree exports copied from the app
+- Folder navigation with detail view, search, filters, and sorting
+- File properties window on double-click
+- Folder tree copy actions for folders-only or folders-plus-files output
+- Comparison of two imports with highlights for new, missing, and changed items
+- Export of the current view to CSV
 
-## Projektstruktur
+## Project Structure
 
 ```text
 CsvFileBrowser/
-├─ file_browser.pyw              # Windows/Tk launcher
-├─ CsvFileBrowser.spec           # PyInstaller build config
-├─ csv_file_browser/
-│  ├─ app.py                     # Hauptfenster und UI-Workflow
-│  ├─ dialogs.py                 # Import-, Filter- und Compare-Dialoge
-│  ├─ icons.py                   # Icon-Laden und kleine generierte Icons
-│  ├─ models.py                  # Konstanten und Dataclasses
-│  ├─ parsing.py                 # CSV-/Tree-Import und Erkennung
-│  └─ utils.py                   # Pfad-, Größen- und Filter-Helfer
-├─ icons/                        # UI-Icons
-├─ README.md
-├─ LICENSE
-└─ requirements.txt
+|-- file_browser.pyw              # Windows/Tk launcher
+|-- CsvFileBrowser.spec           # PyInstaller build config
+|-- csv_file_browser/
+|   |-- app.py                    # Main window and UI workflow
+|   |-- dialogs.py                # Import, filter, and compare dialogs
+|   |-- icons.py                  # Icon loading and generated UI icons
+|   |-- models.py                 # Constants and dataclasses
+|   |-- parsing.py                # CSV/tree import and detection
+|   `-- utils.py                  # Path, size, and filter helpers
+|-- icons/                        # UI icons
+|-- README.md
+|-- LICENSE
+`-- requirements.txt
 ```
 
-## Starten
+## Run
 
 ```powershell
 python file_browser.pyw
 ```
 
-Alternativ als Modul:
+Or run it as a module:
 
 ```powershell
 python -m csv_file_browser
 ```
 
-## Abhängigkeiten
+## Dependencies
 
-Die App nutzt Python/Tkinter. `Pillow` ist empfohlen, damit PNG-Icons sauber geladen und skaliert werden können.
+The app uses Python/Tkinter. `Pillow` is recommended so PNG icons can be loaded and scaled cleanly.
 
 ```powershell
 pip install -r requirements.txt
@@ -54,10 +54,10 @@ pip install -r requirements.txt
 
 ## Build
 
-Für einen Windows-Build ist eine PyInstaller-Spec enthalten:
+A PyInstaller spec is included for Windows builds:
 
 ```powershell
 pyinstaller CsvFileBrowser.spec
 ```
 
-Das Icon-Verzeichnis wird über die Spec als Datenquelle eingebunden.
+The `icons/` directory is included as application data by the spec file.
