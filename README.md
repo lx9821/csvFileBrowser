@@ -30,6 +30,7 @@ CsvFileBrowser/
 |   |-- parsing.py                # CSV/tree import and detection
 |   |-- profile_store.py          # Saved import profile persistence
 |   `-- utils.py                  # Path, size, and filter helpers
+|-- examples/                     # Synthetic demo data for screenshots/testing
 |-- icons/                        # UI icons
 |-- README.md
 |-- LICENSE
@@ -48,6 +49,12 @@ CsvFileBrowser/
 Paths are normalized internally for navigation. The importer can detect Windows-style paths such as `C:\Users\Alice\file.txt`, POSIX paths such as `/home/alice/file.txt`, and mixed or suspicious separator usage. If an import is ambiguous, the app shows a warning and lets you choose the path style in **Manage columns**.
 
 Import profiles are saved locally for matching CSV header sets, so recurring exports can reuse the same path columns, visible columns, size-unit choices, and path-style setting.
+
+## Example Data
+
+The `examples/` folder contains synthetic demo data that can be used for screenshots and local testing. It does not contain real case data.
+
+- `examples/ftk_sample_file_listing.csv` - FTK-style file listing with fictional custodians, Windows paths, metadata, deleted items, duplicates, browser artifacts, archives, images, and documents.
 
 ## Run
 
