@@ -25,6 +25,58 @@ from .models import (
 from .parsing import best_column
 from .utils import clean_cell, detect_size_unit, normalize_path, parse_number, parse_size_label, split_filter_values
 
+
+class Tooltip:
+    """Small hover tooltip for a single widget."""
+
+    def __init__(self, widget, text, delay=500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.after_id = None
+        self.window = None
+        widget.bind("<Enter>", self.schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+        widget.bind("<Destroy>", self.hide, add="+")
+
+    def schedule(self, _event=None):
+        self.cancel()
+        self.after_id = self.widget.after(self.delay, self.show)
+
+    def cancel(self):
+        if self.after_id is not None:
+            self.widget.after_cancel(self.after_id)
+            self.after_id = None
+
+    def show(self):
+        self.after_id = None
+        if self.window is not None or not self.widget.winfo_exists():
+            return
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.window = tk.Toplevel(self.widget)
+        self.window.wm_overrideredirect(True)
+        self.window.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            self.window,
+            text=self.text,
+            bg="#1f2937",
+            fg="#f8fafc",
+            padx=9,
+            pady=5,
+            justify="left",
+            font=("TkDefaultFont", 9),
+        ).pack()
+
+    def hide(self, _event=None):
+        self.cancel()
+        if self.window is not None:
+            if self.window.winfo_exists():
+                self.window.destroy()
+            self.window = None
+
+
 class ImportDialog(tk.Toplevel):
     def __init__(self, parent, headers, profile=None, selected_metadata=None, action_label="Import"):
         super().__init__(parent)
@@ -523,6 +575,7 @@ class ColumnFilterDialog(tk.Toplevel):
         value_frame.columnconfigure(0, weight=1)
         value = ttk.Entry(value_frame, textvariable=value_var, width=34, style="Filter.TEntry")
         value.grid(row=0, column=0, sticky="ew")
+        Tooltip(value, "Separate multiple values with a semicolon,\ne.g. .png; .jpg; report")
         value_hint = ttk.Label(value_frame, text="No value needed", style="FilterHint.TLabel")
         chip_frame = ttk.Frame(value_frame, style="FilterRule.TFrame")
         chip_frame.columnconfigure(0, weight=1)
@@ -1060,7 +1113,7 @@ class TreeExportDialog(tk.Toplevel):
             ttk.Radiobutton(scope_options, text=checked_label, variable=self.scope_var, value="checked").pack(anchor="w", pady=(3, 0))
             ttk.Label(
                 outer,
-                text="Checked folders include their entire subtree.",
+                text="Exactly the checked folders and files are exported.",
                 wraplength=420,
                 style="PanelMuted.TLabel",
             ).grid(row=row + 1, column=1, sticky="w", pady=(2, 0))
