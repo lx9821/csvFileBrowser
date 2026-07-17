@@ -77,6 +77,74 @@ class Tooltip:
             self.window = None
 
 
+class HoverTooltip:
+    """Tooltip whose text depends on where the pointer is inside a widget.
+
+    ``resolver(event)`` returns ``(zone_key, text)`` for positions that
+    should show a tooltip, or None. The tooltip is re-scheduled whenever
+    the pointer enters a different zone.
+    """
+
+    def __init__(self, widget, resolver, delay=600):
+        self.widget = widget
+        self.resolver = resolver
+        self.delay = delay
+        self.after_id = None
+        self.window = None
+        self.current_key = None
+        self.text = ""
+        widget.bind("<Motion>", self.on_motion, add="+")
+        widget.bind("<Leave>", self.on_leave, add="+")
+        widget.bind("<ButtonPress>", self.on_leave, add="+")
+        widget.bind("<Destroy>", self.on_leave, add="+")
+
+    def on_motion(self, event):
+        resolved = None
+        try:
+            resolved = self.resolver(event)
+        except Exception:
+            resolved = None
+        key = resolved[0] if resolved else None
+        if key == self.current_key:
+            return
+        self.hide()
+        if resolved:
+            self.current_key, self.text = resolved
+            self.after_id = self.widget.after(self.delay, lambda: self.show(event.x_root, event.y_root))
+
+    def on_leave(self, _event=None):
+        self.hide()
+        self.current_key = None
+
+    def hide(self):
+        if self.after_id is not None:
+            self.widget.after_cancel(self.after_id)
+            self.after_id = None
+        if self.window is not None:
+            if self.window.winfo_exists():
+                self.window.destroy()
+            self.window = None
+        self.current_key = None
+
+    def show(self, x_root, y_root):
+        self.after_id = None
+        if self.window is not None or not self.widget.winfo_exists():
+            return
+        self.window = tk.Toplevel(self.widget)
+        self.window.wm_overrideredirect(True)
+        self.window.wm_geometry(f"+{x_root + 14}+{y_root + 18}")
+        tk.Label(
+            self.window,
+            text=self.text,
+            bg="#1f2937",
+            fg="#f8fafc",
+            padx=9,
+            pady=5,
+            justify="left",
+            font=("TkDefaultFont", 9),
+        ).pack()
+
+
 class ImportDialog(tk.Toplevel):
     def __init__(self, parent, headers, profile=None, selected_metadata=None, action_label="Import"):
         super().__init__(parent)
