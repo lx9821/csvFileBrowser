@@ -1,5 +1,6 @@
 import csv
 import os
+import time
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
@@ -8,11 +9,12 @@ try:
 except Exception:
     Image = ImageDraw = ImageFont = ImageTk = None
 
-from .dialogs import ColumnFilterDialog, CompareDetailWindow, CompareRootDialog, ImportDialog, SizeUnitDialog, TreeExportDialog
+from .dialogs import ColumnFilterDialog, CompareDetailWindow, CompareRootDialog, HoverTooltip, ImportDialog, SizeUnitDialog, Tooltip, TreeExportDialog
 from .icons import load_icons, set_window_icon
 from .models import *
 from .parsing import detect_import_profile, file_md5, is_ftk_listing, read_csv_rows, read_tree_listing
 from .profile_store import load_import_profile, save_import_profile
+from .session_store import load_saved_session, save_saved_session
 from .tree_export import compute_tree_stats, generate_tree_html, generate_tree_text
 from .utils import *
 
@@ -48,6 +50,9 @@ class FileBrowser(tk.Tk):
         self.checked_folders = set()
         self.checked_file_entries = {}
         self.check_state_cache = {}
+        self.show_only_checked = False
+        self.current_file_md5 = ""
+        self.session_save_after_id = None
         self.sort_column = "name"
         self.sort_descending = False
         self.detail_render_token = 0
@@ -85,6 +90,7 @@ class FileBrowser(tk.Tk):
         self.file_title_var = tk.StringVar(value="No file loaded")
         self.file_md5_var = tk.StringVar(value="")
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _build_ui(self):
         self.configure(bg=COLORS["app_bg"])
@@ -165,6 +171,9 @@ class FileBrowser(tk.Tk):
         filter_options = {"image": self.icons.get("filter"), "compound": "left"} if self.icons.get("filter") else {}
         self.filter_button = ttk.Button(tools, text="Filters", command=self.open_filter_dialog, style="Tool.TButton", **filter_options)
         self.filter_button.pack(side="right", padx=(8, 0))
+        self.checked_filter_button = ttk.Button(tools, text="Checked", command=self.toggle_show_only_checked, state="disabled", style="Tool.TButton")
+        self.checked_filter_button.pack(side="right", padx=(8, 0))
+        Tooltip(self.checked_filter_button, "Show only checked items in the list.")
         self.clear_filter_button = ttk.Button(tools, text="Clear", command=self.clear_column_filters, state="disabled", style="Tool.TButton")
         self.clear_filter_button.pack(side="right", padx=(8, 0))
 
@@ -280,6 +289,9 @@ class FileBrowser(tk.Tk):
         self.details_context_menu.add_command(label="Export checked items to CSV", command=self.export_checked_csv)
         self.details_context_menu.add_separator()
         self.details_context_menu.add_command(label="Clear checkboxes", command=self.clear_all_checks)
+
+        HoverTooltip(self.tree, self.tree_tooltip_zone)
+        HoverTooltip(self.details, self.details_tooltip_zone)
 
 
     def _build_import_screen(self):
@@ -529,6 +541,7 @@ class FileBrowser(tk.Tk):
             self.status_var.set("Import failed.")
             return
         self.clear_busy()
+        self.begin_import_session_guard()
 
         profile, saved_profile = load_import_profile(headers)
         self.saved_profile_name = ""
@@ -574,6 +587,8 @@ class FileBrowser(tk.Tk):
             f"Path style: {path_style_label(profile.path_style)}.{profile_note}{warning_note}"
         )
         self.clear_busy()
+        self.current_file_md5 = csv_md5
+        self.offer_session_restore()
 
     def csv_path_values(self, rows, profile):
         values = []
@@ -616,6 +631,7 @@ class FileBrowser(tk.Tk):
         self.set_busy(f"Reading {file_name}...", overlay=True)
         entries, encoding = read_tree_listing(file_path)
         csv_md5 = file_md5(file_path)
+        self.begin_import_session_guard()
 
         self.current_file = file_path
         self.headers = []
@@ -639,6 +655,8 @@ class FileBrowser(tk.Tk):
         folder_count = sum(entry.is_folder for entry in entries)
         self.status_var.set(f"Loaded {file_name}: {file_count:,} files, {folder_count:,} folders, {encoding}.")
         self.clear_busy()
+        self.current_file_md5 = csv_md5
+        self.offer_session_restore()
 
     def load_compare_file(self):
         if not self.entries or not self.import_kind:
@@ -1028,6 +1046,8 @@ class FileBrowser(tk.Tk):
         self.checked_folders.clear()
         self.checked_file_entries.clear()
         self.invalidate_check_states()
+        self.show_only_checked = False
+        self.update_checked_button()
         if plate_root and self.entries:
             self.plated_folders.add("/")
         self.build_structure()
@@ -1182,6 +1202,7 @@ class FileBrowser(tk.Tk):
         self.update_filter_button()
         self.update_sort_headings()
         self.refresh_details()
+        self.schedule_session_save()
 
     def clear_column_filters(self):
         if not self.column_filters and not self.search_var.get().strip():
@@ -1192,10 +1213,12 @@ class FileBrowser(tk.Tk):
         self.update_filter_button()
         self.update_sort_headings()
         self.refresh_details()
+        self.schedule_session_save()
 
     def on_filter_text_changed(self):
         self.update_filter_button()
         self.schedule_refresh_details()
+        self.schedule_session_save()
 
     def update_filter_button(self):
         if not hasattr(self, "filter_button"):
@@ -1485,6 +1508,40 @@ class FileBrowser(tk.Tk):
             left -= 1
         return left
 
+    def tree_tooltip_zone(self, event):
+        item = self.tree.identify_row(event.y)
+        if not item or self.is_dummy_iid(item) or self.tree.identify_column(event.x) != "#0":
+            return None
+        if "image" not in self.tree.identify_element(event.x, event.y):
+            return None
+        offset = event.x - self.treeview_icon_left_edge(self.tree, event.x, event.y)
+        check_end = ICON_SIZE[0] + TREE_ICON_GAP // 2
+        plate_end = check_end + ICON_SIZE[0] + TREE_ICON_GAP
+        if offset <= check_end:
+            return ("tree-check", item), "Check or uncheck this folder\nand everything inside it."
+        if offset <= plate_end:
+            return ("tree-plate", item), "Plate: show every file below this folder\nas one flat list.\nShift-click to combine several plates."
+        if item in self.compare_detail_by_path:
+            base_icon = self.folder_base_icon(item)
+            base_width = base_icon.width() if base_icon else 0
+            if offset >= ICON_SIZE[0] + TREE_ICON_GAP + base_width:
+                return ("tree-info", item), "Compare difference - click for details."
+        return None
+
+    def details_tooltip_zone(self, event):
+        item = self.details.identify_row(event.y)
+        if not item or item == self.detail_loading_iid or self.details.identify_column(event.x) != "#0":
+            return None
+        if "image" not in self.details.identify_element(event.x, event.y):
+            return None
+        offset = event.x - self.treeview_icon_left_edge(self.details, event.x, event.y)
+        if offset <= ICON_SIZE[0] + DETAIL_NUMBER_GAP // 2:
+            return ("detail-check", item), "Check or uncheck this item\nfor checked-item exports."
+        path = self.detail_path_for_iid(item)
+        if path and path in self.compare_detail_by_path and offset >= self.detail_number_icon_offset:
+            return ("detail-info", item), "Compare difference - click for details."
+        return None
+
     def toggle_folder_checked(self, path):
         # A partially checked folder becomes fully checked; only a fully
         # checked folder is unchecked (both cascade to all children).
@@ -1493,6 +1550,8 @@ class FileBrowser(tk.Tk):
         self.refresh_tree_labels()
         self.update_visible_detail_check_icons()
         self.report_checked_status()
+        if self.show_only_checked:
+            self.refresh_details()
 
     def set_folder_checked_recursive(self, path, checked):
         def walk(folder):
@@ -1560,17 +1619,44 @@ class FileBrowser(tk.Tk):
         self.refresh_tree_labels()
         self.update_visible_detail_check_icons()
         self.report_checked_status()
+        if self.show_only_checked:
+            self.refresh_details()
 
     def checked_item_count(self):
         return len(self.checked_folders) + len(self.checked_file_entries)
 
     def report_checked_status(self):
         count = self.checked_item_count()
+        self.update_checked_button()
+        self.schedule_session_save()
+        if self.show_only_checked and not count:
+            self.show_only_checked = False
+            self.update_checked_button()
+            self.refresh_details()
+            self.status_var.set("No items checked - showing all items again.")
+            return
         if count:
             label = "item" if count == 1 else "items"
             self.status_var.set(f"{count:,} {label} checked.")
         else:
             self.status_var.set("No items checked.")
+
+    def update_checked_button(self):
+        if not hasattr(self, "checked_filter_button"):
+            return
+        count = self.checked_item_count()
+        self.checked_filter_button.configure(
+            text=f"Checked ({count:,})" if count else "Checked",
+            style="FilterActive.TButton" if self.show_only_checked else "Tool.TButton",
+            state="normal" if (count or self.show_only_checked) else "disabled",
+        )
+
+    def toggle_show_only_checked(self):
+        if not self.show_only_checked and not self.checked_item_count():
+            return
+        self.show_only_checked = not self.show_only_checked
+        self.update_checked_button()
+        self.refresh_details()
 
     def set_selection_checked(self, checked):
         changed = False
@@ -1591,16 +1677,137 @@ class FileBrowser(tk.Tk):
         self.refresh_tree_labels()
         self.update_visible_detail_check_icons()
         self.report_checked_status()
+        if self.show_only_checked:
+            self.refresh_details()
 
     def clear_all_checks(self):
         if not self.checked_item_count():
             return
+        was_filtering = self.show_only_checked
         self.checked_folders.clear()
         self.checked_file_entries.clear()
         self.invalidate_check_states()
+        self.show_only_checked = False
+        self.update_checked_button()
+        self.schedule_session_save()
         self.refresh_tree_labels()
-        self.update_visible_detail_check_icons()
+        if was_filtering:
+            self.refresh_details()
+        else:
+            self.update_visible_detail_check_icons()
         self.status_var.set("Cleared all checkboxes.")
+
+    def begin_import_session_guard(self):
+        """Detach session persistence from the previous file before an import."""
+        self.current_file_md5 = ""
+        if self.session_save_after_id is not None:
+            self.after_cancel(self.session_save_after_id)
+            self.session_save_after_id = None
+
+    def schedule_session_save(self):
+        if not self.current_file_md5:
+            return
+        if self.session_save_after_id is not None:
+            self.after_cancel(self.session_save_after_id)
+        self.session_save_after_id = self.after(1200, self.save_session_now)
+
+    def save_session_now(self):
+        self.session_save_after_id = None
+        if not self.current_file_md5:
+            return
+        save_saved_session(self.current_file_md5, self.session_snapshot())
+
+    def session_snapshot(self):
+        return {
+            "version": 1,
+            "file_name": os.path.basename(self.current_file or ""),
+            "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "checked_folders": sorted(self.checked_folders),
+            "checked_files": sorted({entry.full_path for entry in self.checked_file_entries.values()}),
+            "plated_folders": sorted(self.plated_folders),
+            "search": self.search_var.get(),
+            "filters": [
+                {"column": clause.column, "operator": clause.operator, "value": clause.value, "logical": clause.logical}
+                for clause in self.normalized_filter_clauses()
+            ],
+        }
+
+    def offer_session_restore(self):
+        if not self.current_file_md5:
+            return
+        data = load_saved_session(self.current_file_md5)
+        if not data:
+            return
+
+        parts = []
+        checked_count = len(data.get("checked_folders", [])) + len(data.get("checked_files", []))
+        if checked_count:
+            parts.append(f"{checked_count:,} checked item{'s' if checked_count != 1 else ''}")
+        if data.get("plated_folders"):
+            parts.append(f"{len(data['plated_folders'])} plate{'s' if len(data['plated_folders']) != 1 else ''}")
+        if data.get("filters") or data.get("search"):
+            parts.append("filters")
+        summary = ", ".join(parts) or "saved state"
+        saved_at = data.get("saved_at", "")
+        when = f" from {saved_at.replace('T', ' ')}" if saved_at else ""
+        if messagebox.askyesno(
+            "Restore session",
+            f"A saved session for this file was found{when} ({summary}).\n\nRestore it now?",
+        ):
+            self.apply_saved_session(data)
+
+    def apply_saved_session(self, data):
+        allowed = set(self.available_filter_columns())
+        filters = []
+        for item in data.get("filters", []):
+            column = item.get("column", "")
+            operator = item.get("operator", "")
+            if column in allowed and operator in FILTER_OPERATORS:
+                filters.append(
+                    FilterClause(
+                        column=column,
+                        operator=operator,
+                        value=item.get("value", ""),
+                        logical=item.get("logical", "AND") or "AND",
+                    )
+                )
+        self.column_filters = filters
+
+        search = data.get("search", "")
+        if self.search_var.get() != search:
+            self.search_var.set(search)
+
+        self.plated_folders = {path for path in data.get("plated_folders", []) if path in self.tree_data}
+        self.checked_folders = {path for path in data.get("checked_folders", []) if path in self.tree_data}
+        self.checked_file_entries = {}
+        entries_by_path = {}
+        for entry in self.entries:
+            if not entry.is_folder:
+                entries_by_path.setdefault(entry.full_path, []).append(entry)
+        for path in data.get("checked_files", []):
+            for entry in entries_by_path.get(path, []):
+                self.checked_file_entries[id(entry)] = entry
+
+        self.invalidate_check_states()
+        self.update_filter_button()
+        self.update_sort_headings()
+        self.update_checked_button()
+        self.refresh_tree_labels()
+        self.refresh_details()
+        count = self.checked_item_count()
+        self.status_var.set(
+            f"Session restored: {count:,} checked item{'s' if count != 1 else ''}, "
+            f"{len(self.plated_folders)} plate{'s' if len(self.plated_folders) != 1 else ''}, "
+            f"{len(self.column_filters)} filter{'s' if len(self.column_filters) != 1 else ''}."
+        )
+
+    def on_close(self):
+        if self.session_save_after_id is not None:
+            self.after_cancel(self.session_save_after_id)
+            self.session_save_after_id = None
+        if self.current_file_md5:
+            save_saved_session(self.current_file_md5, self.session_snapshot())
+        self.destroy()
 
     def update_detail_row_icon(self, iid):
         if not iid or not self.details.exists(iid):
@@ -1635,6 +1842,7 @@ class FileBrowser(tk.Tk):
 
         self.refresh_tree_labels()
         self.refresh_details()
+        self.schedule_session_save()
 
     def on_select(self, event):
         selected = self.tree.focus()
@@ -1666,12 +1874,16 @@ class FileBrowser(tk.Tk):
                     continue
                 if not self.folder_matches_filters(sub):
                     continue
+                if self.show_only_checked and self.folder_check_state(sub) == "off":
+                    continue
                 detail_items.append(("folder", sub))
 
         all_files = self.files_for_current_view()
         all_files.sort(key=lambda item: self.entry_sort_key(item, plate_mode), reverse=self.sort_descending)
         matched_files = []
         for entry in all_files:
+            if self.show_only_checked and id(entry) not in self.checked_file_entries:
+                continue
             display = self.entry_display_name(entry, plate_mode)
             searchable = " ".join([display, entry.name, entry.full_path, *entry.metadata.values()]).lower()
             if query and query not in searchable:
@@ -1694,7 +1906,7 @@ class FileBrowser(tk.Tk):
         self.detail_number_icon_cache.clear()
         self.detail_number_width = self.detail_number_width_for(len(detail_items))
         self.detail_number_icon_offset = ICON_SIZE[0] + DETAIL_NUMBER_GAP + self.detail_number_width + DETAIL_NUMBER_GAP
-        self.update_no_results_state(bool(self.entries) and not detail_items and bool(query or self.column_filters))
+        self.update_no_results_state(bool(self.entries) and not detail_items and bool(query or self.column_filters or self.show_only_checked))
         self.render_detail_page(self.detail_render_token)
         self.clear_busy()
 
@@ -1796,13 +2008,15 @@ class FileBrowser(tk.Tk):
             self.next_page_button.configure(state=next_state)
 
         scope = "Current view" if self.detail_plate_mode else f"{display_name(self.current_folder)} (direct)"
+        if self.show_only_checked:
+            scope += ", checked only"
         if filter_active:
             self.status_var.set(f"{scope}: {total_items:,} hits, showing {shown_text}.")
         else:
             self.status_var.set(f"{scope}: {total_items:,} items.")
 
     def detail_filter_active(self):
-        return bool(self.search_var.get().strip() or self.normalized_filter_clauses())
+        return bool(self.search_var.get().strip() or self.normalized_filter_clauses() or self.show_only_checked)
 
     def set_detail_summary_visible(self, visible):
         if not hasattr(self, "summary_bar"):
