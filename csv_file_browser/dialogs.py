@@ -1011,3 +1011,93 @@ class CompareDetailWindow(tk.Toplevel):
         return value if value != "" else "[empty]"
 
 
+class TreeExportDialog(tk.Toplevel):
+    """Options for copying or exporting a folder tree.
+
+    ``result`` is None on cancel, otherwise a dict with:
+    action ("clipboard" | "text" | "html"), include_files (bool),
+    max_depth (int, 0 = unlimited), annotate (bool).
+    """
+
+    def __init__(self, parent, scope_label, has_sizes=False, selection=False):
+        super().__init__(parent)
+        self.title("Copy tree")
+        set_window_icon(self)
+        self.resizable(False, False)
+        self.result = None
+
+        self.include_files_var = tk.StringVar(value="files")
+        self.depth_var = tk.StringVar(value="0")
+        self.annotate_var = tk.BooleanVar(value=False)
+
+        self.configure(bg=COLORS["app_bg"])
+        outer = ttk.Frame(self, padding=18, style="Panel.TFrame")
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.columnconfigure(1, weight=1)
+
+        if selection:
+            heading = f"Tree of the selected items in {scope_label}" if scope_label else "Tree of the selected items"
+        else:
+            heading = f"Tree for {scope_label}" if scope_label else "Tree export"
+        ttk.Label(outer, text=heading, style="PanelTitle.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
+
+        ttk.Label(outer, text="Include").grid(row=1, column=0, sticky="nw", padx=(0, 14), pady=(0, 4))
+        include_options = ttk.Frame(outer, style="Panel.TFrame")
+        include_options.grid(row=1, column=1, sticky="w", pady=(0, 4))
+        ttk.Radiobutton(include_options, text="Folders and files", variable=self.include_files_var, value="files").pack(anchor="w")
+        ttk.Radiobutton(include_options, text="Folders only", variable=self.include_files_var, value="folders").pack(anchor="w", pady=(3, 0))
+
+        ttk.Label(outer, text="Maximum depth").grid(row=2, column=0, sticky="w", padx=(0, 14), pady=(10, 0))
+        depth_row = ttk.Frame(outer, style="Panel.TFrame")
+        depth_row.grid(row=2, column=1, sticky="w", pady=(10, 0))
+        ttk.Spinbox(depth_row, from_=0, to=999, textvariable=self.depth_var, width=6).pack(side="left")
+        ttk.Label(depth_row, text="0 = all levels", style="PanelMuted.TLabel").pack(side="left", padx=(10, 0))
+
+        ttk.Label(
+            outer,
+            text="Levels below the depth limit are shown as […] with the number of hidden folders and files.",
+            wraplength=420,
+            style="PanelMuted.TLabel",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        annotate_text = "Show file count and total size for each folder" if has_sizes else "Show file count for each folder"
+        ttk.Checkbutton(outer, text=annotate_text, variable=self.annotate_var).grid(row=4, column=0, columnspan=2, sticky="w", pady=(12, 0))
+
+        button_row = ttk.Frame(outer, style="Panel.TFrame")
+        button_row.grid(row=5, column=0, columnspan=2, sticky="e", pady=(18, 0))
+        ttk.Button(button_row, text="Cancel", command=self.cancel, style="FilterGhost.TButton").pack(side="right")
+        ttk.Button(button_row, text="Save as HTML...", command=lambda: self.accept("html"), style="Tool.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(button_row, text="Save as text...", command=lambda: self.accept("text"), style="Tool.TButton").pack(side="right", padx=(0, 8))
+        ttk.Button(button_row, text="Copy to clipboard", command=lambda: self.accept("clipboard"), style="Accent.TButton").pack(side="right", padx=(0, 8))
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.bind("<Return>", lambda _event: self.accept("clipboard"))
+        self.bind("<Escape>", lambda _event: self.cancel())
+        self.wait_visibility()
+        self.focus()
+
+    def accept(self, action):
+        depth_text = clean_cell(self.depth_var.get())
+        try:
+            max_depth = int(depth_text) if depth_text else 0
+        except ValueError:
+            max_depth = -1
+        if max_depth < 0:
+            messagebox.showerror("Invalid depth", "Maximum depth must be a whole number (0 = all levels).", parent=self)
+            return
+
+        self.result = {
+            "action": action,
+            "include_files": self.include_files_var.get() == "files",
+            "max_depth": max_depth,
+            "annotate": bool(self.annotate_var.get()),
+        }
+        self.destroy()
+
+    def cancel(self):
+        self.result = None
+        self.destroy()
+
+
