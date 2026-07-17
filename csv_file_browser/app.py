@@ -12,7 +12,7 @@ try:
 except Exception:
     Image = ImageDraw = ImageFont = ImageTk = None
 
-from .dialogs import ColumnFilterDialog, CompareDetailWindow, CompareRootDialog, HoverTooltip, ImportDialog, SizeUnitDialog, Tooltip, TreeExportDialog
+from .dialogs import ColumnFilterDialog, CompareDetailWindow, CompareRootDialog, HoverTooltip, HtmlReportDialog, ImportDialog, SizeUnitDialog, Tooltip, TreeExportDialog
 from .icons import load_icons, set_window_icon
 from .models import *
 from .parsing import detect_import_profile, file_md5, is_ftk_listing, read_csv_rows, read_tree_listing
@@ -3145,15 +3145,19 @@ class FileBrowser(tk.Tk):
             selection=selection,
             checked_count=checked_count,
             allow_ancestors=root != "/",
-            report_defaults=self.report_settings,
         )
         self.wait_window(dialog)
         options = dialog.result
         if not options:
             return
 
-        self.report_settings = dict(options.get("report") or {})
-        self.schedule_session_save()
+        if options["action"] == "html":
+            report_dialog = HtmlReportDialog(self, defaults=self.report_settings, metadata_columns=self.metadata_columns)
+            self.wait_window(report_dialog)
+            if report_dialog.result is None:
+                return
+            self.report_settings = dict(report_dialog.result)
+            self.schedule_session_save()
 
         stats = compute_tree_stats(root, tree_data, folder_entries, self.entry_size_bytes)
         render_options = {
@@ -3200,6 +3204,11 @@ class FileBrowser(tk.Tk):
         if action == "html":
             report = dict(self.report_settings)
             report["logo_data"] = self.logo_data_uri(report.get("logo_path", ""))
+            stored_columns = report.get("detail_columns")
+            if stored_columns is None:
+                detail_columns = list(self.metadata_columns)
+            else:
+                detail_columns = [column for column in stored_columns if column in self.metadata_columns]
             content = generate_tree_html(
                 root,
                 root_label,
@@ -3208,7 +3217,7 @@ class FileBrowser(tk.Tk):
                 source_name=os.path.basename(self.current_file or ""),
                 root_location=root.strip("/") or "/",
                 file_details=bool(report.get("file_details")),
-                metadata_columns=list(self.metadata_columns),
+                metadata_columns=detail_columns,
                 report=report,
                 **render_options,
             )

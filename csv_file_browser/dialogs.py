@@ -1147,12 +1147,11 @@ class TreeExportDialog(tk.Toplevel):
     ``result`` is None on cancel, otherwise a dict with:
     action ("clipboard" | "text" | "html"), include_files (bool),
     max_depth (int, 0 = unlimited), annotate (bool), checked_only (bool),
-    with_ancestors (bool), and report (dict with case/evidence/description/
-    logo_path/classification/classification_warning/file_details for the
-    HTML report header).
+    with_ancestors (bool). Report details for HTML exports are collected
+    afterwards by ``HtmlReportDialog``.
     """
 
-    def __init__(self, parent, scope_label, has_sizes=False, selection=False, checked_count=0, allow_ancestors=False, report_defaults=None):
+    def __init__(self, parent, scope_label, has_sizes=False, selection=False, checked_count=0, allow_ancestors=False):
         super().__init__(parent)
         self.title("Copy tree")
         set_window_icon(self)
@@ -1164,15 +1163,6 @@ class TreeExportDialog(tk.Toplevel):
         self.depth_var = tk.StringVar(value="0")
         self.annotate_var = tk.BooleanVar(value=False)
         self.ancestors_var = tk.BooleanVar(value=False)
-
-        report_defaults = report_defaults or {}
-        self.case_var = tk.StringVar(value=report_defaults.get("case", ""))
-        self.evidence_var = tk.StringVar(value=report_defaults.get("evidence", ""))
-        self.description_var = tk.StringVar(value=report_defaults.get("description", ""))
-        self.logo_var = tk.StringVar(value=report_defaults.get("logo_path", ""))
-        self.classification_var = tk.StringVar(value=report_defaults.get("classification", ""))
-        self.warning_var = tk.StringVar(value=report_defaults.get("classification_warning", ""))
-        self.file_details_var = tk.BooleanVar(value=bool(report_defaults.get("file_details")))
 
         self.configure(bg=COLORS["app_bg"])
         outer = ttk.Frame(self, padding=18, style="Panel.TFrame")
@@ -1236,46 +1226,6 @@ class TreeExportDialog(tk.Toplevel):
             ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
             row += 1
 
-        ttk.Label(outer, text="HTML report (optional)", style="PanelTitle.TLabel").grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=(16, 6)
-        )
-        row += 1
-
-        def report_entry(label, variable):
-            nonlocal row
-            ttk.Label(outer, text=label).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=2)
-            ttk.Entry(outer, textvariable=variable, width=44, style="Filter.TEntry").grid(row=row, column=1, sticky="ew", pady=2)
-            row += 1
-
-        report_entry("Case name", self.case_var)
-        report_entry("Evidence", self.evidence_var)
-        report_entry("Description", self.description_var)
-
-        ttk.Label(outer, text="Logo").grid(row=row, column=0, sticky="w", padx=(0, 14), pady=2)
-        logo_row = ttk.Frame(outer, style="Panel.TFrame")
-        logo_row.grid(row=row, column=1, sticky="ew", pady=2)
-        logo_row.columnconfigure(0, weight=1)
-        ttk.Entry(logo_row, textvariable=self.logo_var, style="Filter.TEntry").grid(row=0, column=0, sticky="ew")
-        ttk.Button(logo_row, text="Browse...", command=self.browse_logo, style="Tool.TButton").grid(row=0, column=1, padx=(8, 0))
-        row += 1
-
-        report_entry("Classification", self.classification_var)
-        report_entry("Warning line", self.warning_var)
-        ttk.Label(
-            outer,
-            text='Classification lines appear as a banner above the report, e.g. "Privileged & Confidential" / "DRAFT - FOR DISCUSSION PURPOSES ONLY".',
-            wraplength=420,
-            style="PanelMuted.TLabel",
-        ).grid(row=row, column=1, sticky="w", pady=(0, 2))
-        row += 1
-
-        ttk.Checkbutton(
-            outer,
-            text="Include file details (metadata) in the HTML report",
-            variable=self.file_details_var,
-        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
-        row += 1
-
         button_row = ttk.Frame(outer, style="Panel.TFrame")
         button_row.grid(row=row, column=0, columnspan=2, sticky="e", pady=(18, 0))
         ttk.Button(button_row, text="Cancel", command=self.cancel, style="FilterGhost.TButton").pack(side="right")
@@ -1308,17 +1258,203 @@ class TreeExportDialog(tk.Toplevel):
             "annotate": bool(self.annotate_var.get()),
             "checked_only": self.scope_var.get() == "checked",
             "with_ancestors": bool(self.ancestors_var.get()),
-            "report": {
-                "case": clean_cell(self.case_var.get()),
-                "evidence": clean_cell(self.evidence_var.get()),
-                "description": clean_cell(self.description_var.get()),
-                "logo_path": clean_cell(self.logo_var.get()),
-                "classification": clean_cell(self.classification_var.get()),
-                "classification_warning": clean_cell(self.warning_var.get()),
-                "file_details": bool(self.file_details_var.get()),
-            },
         }
         self.destroy()
+
+    def cancel(self):
+        self.result = None
+        self.destroy()
+
+
+class MetadataColumnDialog(tk.Toplevel):
+    """Pick which metadata columns go into the HTML file details."""
+
+    def __init__(self, parent, columns, selected):
+        super().__init__(parent)
+        self.title("File detail columns")
+        set_window_icon(self)
+        self.resizable(False, False)
+        self.result = None
+        self.columns = list(columns)
+
+        self.configure(bg=COLORS["app_bg"])
+        outer = ttk.Frame(self, padding=16, style="Panel.TFrame")
+        outer.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(
+            outer,
+            text="Choose the metadata columns shown for each file in the HTML report.",
+            wraplength=380,
+            style="PanelMuted.TLabel",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        list_frame = ttk.Frame(outer, style="Panel.TFrame")
+        list_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        self.listbox = tk.Listbox(
+            list_frame,
+            selectmode="multiple",
+            width=44,
+            height=min(16, max(6, len(self.columns))),
+            exportselection=False,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+            selectbackground=COLORS["accent"],
+            selectforeground="#ffffff",
+            font=("TkDefaultFont", 10),
+        )
+        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox.yview)
+        self.listbox.configure(yscrollcommand=scroll.set)
+        self.listbox.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+
+        selected_set = set(selected or self.columns)
+        for index, column in enumerate(self.columns):
+            self.listbox.insert("end", column)
+            if column in selected_set:
+                self.listbox.selection_set(index)
+
+        pick_row = ttk.Frame(outer, style="Panel.TFrame")
+        pick_row.grid(row=2, column=0, sticky="w", pady=(10, 0))
+        ttk.Button(pick_row, text="All", command=lambda: self.listbox.selection_set(0, "end"), style="FilterGhost.TButton").pack(side="left")
+        ttk.Button(pick_row, text="None", command=lambda: self.listbox.selection_clear(0, "end"), style="FilterGhost.TButton").pack(side="left", padx=(6, 0))
+
+        button_row = ttk.Frame(outer, style="Panel.TFrame")
+        button_row.grid(row=2, column=1, sticky="e", pady=(10, 0))
+        ttk.Button(button_row, text="Cancel", command=self.cancel, style="FilterGhost.TButton").pack(side="right")
+        ttk.Button(button_row, text="Apply", command=self.accept, style="Accent.TButton").pack(side="right", padx=(0, 8))
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.wait_visibility()
+        self.focus()
+
+    def accept(self):
+        self.result = [self.columns[index] for index in self.listbox.curselection()]
+        self.destroy()
+
+    def cancel(self):
+        self.result = None
+        self.destroy()
+
+
+class HtmlReportDialog(tk.Toplevel):
+    """Second step of the HTML export: optional report header details.
+
+    ``result`` is None on cancel, otherwise a dict with case, evidence,
+    description, logo_path, classification, classification_warning,
+    file_details (bool), and detail_columns (list of metadata columns).
+    """
+
+    def __init__(self, parent, defaults=None, metadata_columns=None):
+        super().__init__(parent)
+        self.title("HTML report")
+        set_window_icon(self)
+        self.resizable(False, False)
+        self.result = None
+        self.metadata_columns = list(metadata_columns or [])
+
+        defaults = defaults or {}
+        self.case_var = tk.StringVar(value=defaults.get("case", ""))
+        self.evidence_var = tk.StringVar(value=defaults.get("evidence", ""))
+        self.description_var = tk.StringVar(value=defaults.get("description", ""))
+        self.logo_var = tk.StringVar(value=defaults.get("logo_path", ""))
+        self.classification_var = tk.StringVar(value=defaults.get("classification", ""))
+        self.warning_var = tk.StringVar(value=defaults.get("classification_warning", ""))
+        self.file_details_var = tk.BooleanVar(value=bool(defaults.get("file_details")))
+        stored_columns = [column for column in (defaults.get("detail_columns") or []) if column in self.metadata_columns]
+        self.detail_columns = stored_columns or list(self.metadata_columns)
+        self.columns_label_var = tk.StringVar()
+
+        self.configure(bg=COLORS["app_bg"])
+        outer = ttk.Frame(self, padding=18, style="Panel.TFrame")
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.columnconfigure(1, weight=1)
+
+        row = 0
+        ttk.Label(outer, text="Report details (all optional)", style="PanelTitle.TLabel").grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        row += 1
+
+        def report_entry(label, variable):
+            nonlocal row
+            ttk.Label(outer, text=label).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=2)
+            ttk.Entry(outer, textvariable=variable, width=44, style="Filter.TEntry").grid(row=row, column=1, sticky="ew", pady=2)
+            row += 1
+
+        report_entry("Case name", self.case_var)
+        report_entry("Evidence", self.evidence_var)
+        report_entry("Description", self.description_var)
+
+        ttk.Label(outer, text="Logo").grid(row=row, column=0, sticky="w", padx=(0, 14), pady=2)
+        logo_row = ttk.Frame(outer, style="Panel.TFrame")
+        logo_row.grid(row=row, column=1, sticky="ew", pady=2)
+        logo_row.columnconfigure(0, weight=1)
+        ttk.Entry(logo_row, textvariable=self.logo_var, style="Filter.TEntry").grid(row=0, column=0, sticky="ew")
+        ttk.Button(logo_row, text="Browse...", command=self.browse_logo, style="Tool.TButton").grid(row=0, column=1, padx=(8, 0))
+        row += 1
+
+        report_entry("Classification", self.classification_var)
+        report_entry("Warning line", self.warning_var)
+        ttk.Label(
+            outer,
+            text='The classification lines appear as a banner above the report, e.g. "Privileged & Confidential" / "DRAFT - FOR DISCUSSION PURPOSES ONLY".',
+            wraplength=420,
+            style="PanelMuted.TLabel",
+        ).grid(row=row, column=1, sticky="w", pady=(0, 6))
+        row += 1
+
+        details_row = ttk.Frame(outer, style="Panel.TFrame")
+        details_row.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        details_row.columnconfigure(1, weight=1)
+        ttk.Checkbutton(
+            details_row,
+            text="Include file details (metadata)",
+            variable=self.file_details_var,
+            command=self.update_columns_button,
+        ).grid(row=0, column=0, sticky="w")
+        self.columns_button = ttk.Button(details_row, text="Columns...", command=self.choose_columns, style="Tool.TButton")
+        self.columns_button.grid(row=0, column=2, sticky="e")
+        ttk.Label(details_row, textvariable=self.columns_label_var, style="PanelMuted.TLabel").grid(row=0, column=1, sticky="e", padx=(0, 10))
+        row += 1
+
+        button_row = ttk.Frame(outer, style="Panel.TFrame")
+        button_row.grid(row=row, column=0, columnspan=2, sticky="e", pady=(18, 0))
+        ttk.Button(button_row, text="Cancel", command=self.cancel, style="FilterGhost.TButton").pack(side="right")
+        ttk.Button(button_row, text="Create HTML report", command=self.accept, style="Accent.TButton").pack(side="right", padx=(0, 8))
+
+        self.update_columns_button()
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.bind("<Return>", lambda _event: self.accept())
+        self.bind("<Escape>", lambda _event: self.cancel())
+        self.wait_visibility()
+        self.focus()
+
+    def update_columns_button(self):
+        total = len(self.metadata_columns)
+        if not total:
+            self.columns_label_var.set("No metadata columns available")
+            self.columns_button.configure(state="disabled")
+            return
+        if self.file_details_var.get():
+            self.columns_button.configure(state="normal")
+        else:
+            self.columns_button.configure(state="disabled")
+        if len(self.detail_columns) >= total:
+            self.columns_label_var.set(f"All {total} columns")
+        else:
+            self.columns_label_var.set(f"{len(self.detail_columns)} of {total} columns")
+
+    def choose_columns(self):
+        dialog = MetadataColumnDialog(self, self.metadata_columns, self.detail_columns)
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        self.detail_columns = dialog.result
+        self.update_columns_button()
 
     def browse_logo(self):
         path = filedialog.askopenfilename(
@@ -1327,6 +1463,19 @@ class TreeExportDialog(tk.Toplevel):
         )
         if path:
             self.logo_var.set(path)
+
+    def accept(self):
+        self.result = {
+            "case": clean_cell(self.case_var.get()),
+            "evidence": clean_cell(self.evidence_var.get()),
+            "description": clean_cell(self.description_var.get()),
+            "logo_path": clean_cell(self.logo_var.get()),
+            "classification": clean_cell(self.classification_var.get()),
+            "classification_warning": clean_cell(self.warning_var.get()),
+            "file_details": bool(self.file_details_var.get()),
+            "detail_columns": list(self.detail_columns),
+        }
+        self.destroy()
 
     def cancel(self):
         self.result = None

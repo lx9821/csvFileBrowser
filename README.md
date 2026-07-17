@@ -26,7 +26,7 @@ A small Tkinter desktop tool for browsing, filtering, and comparing CSV-based fi
 - HTML tree reports show recursive folder/file counts and sizes on every folder  
 - Active plates are listed in a chip bar above the table; each can be removed individually or all at once  
 - Files are read in a background thread, so the UI stays responsive during large imports  
-- HTML reports optionally include per-file metadata, a case/evidence/description header, a logo (embedded from a local image), and a classification banner  
+- HTML reports optionally include per-file metadata (with a [+]/[-] expander distinct from folder arrows and a configurable column selection), a case/evidence/description header, a logo (embedded from a local image), and a classification banner; the report details are asked in a second step only when HTML output is chosen  
 - Tooltip on filter value fields explaining semicolon-separated value lists  
 - Comparison of two imports with highlights for new, missing, and changed items  
 - Export of the current view to CSV  
