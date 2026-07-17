@@ -1069,10 +1069,11 @@ class TreeExportDialog(tk.Toplevel):
 
     ``result`` is None on cancel, otherwise a dict with:
     action ("clipboard" | "text" | "html"), include_files (bool),
-    max_depth (int, 0 = unlimited), annotate (bool), checked_only (bool).
+    max_depth (int, 0 = unlimited), annotate (bool), checked_only (bool),
+    with_ancestors (bool).
     """
 
-    def __init__(self, parent, scope_label, has_sizes=False, selection=False, checked_count=0):
+    def __init__(self, parent, scope_label, has_sizes=False, selection=False, checked_count=0, allow_ancestors=False):
         super().__init__(parent)
         self.title("Copy tree")
         set_window_icon(self)
@@ -1083,6 +1084,7 @@ class TreeExportDialog(tk.Toplevel):
         self.scope_var = tk.StringVar(value="all")
         self.depth_var = tk.StringVar(value="0")
         self.annotate_var = tk.BooleanVar(value=False)
+        self.ancestors_var = tk.BooleanVar(value=False)
 
         self.configure(bg=COLORS["app_bg"])
         outer = ttk.Frame(self, padding=18, style="Panel.TFrame")
@@ -1113,7 +1115,7 @@ class TreeExportDialog(tk.Toplevel):
             ttk.Radiobutton(scope_options, text=checked_label, variable=self.scope_var, value="checked").pack(anchor="w", pady=(3, 0))
             ttk.Label(
                 outer,
-                text="Exactly the checked folders and files are exported.",
+                text="Checked items are always included; unchecked items are grouped as […] with counts.",
                 wraplength=420,
                 style="PanelMuted.TLabel",
             ).grid(row=row + 1, column=1, sticky="w", pady=(2, 0))
@@ -1137,6 +1139,14 @@ class TreeExportDialog(tk.Toplevel):
         annotate_text = "Show file count and total size for each folder" if has_sizes else "Show file count for each folder"
         ttk.Checkbutton(outer, text=annotate_text, variable=self.annotate_var).grid(row=row, column=0, columnspan=2, sticky="w", pady=(12, 0))
         row += 1
+
+        if allow_ancestors:
+            ttk.Checkbutton(
+                outer,
+                text="Show parent folders (path from the root)",
+                variable=self.ancestors_var,
+            ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            row += 1
 
         button_row = ttk.Frame(outer, style="Panel.TFrame")
         button_row.grid(row=row, column=0, columnspan=2, sticky="e", pady=(18, 0))
@@ -1169,6 +1179,7 @@ class TreeExportDialog(tk.Toplevel):
             "max_depth": max_depth,
             "annotate": bool(self.annotate_var.get()),
             "checked_only": self.scope_var.get() == "checked",
+            "with_ancestors": bool(self.ancestors_var.get()),
         }
         self.destroy()
 

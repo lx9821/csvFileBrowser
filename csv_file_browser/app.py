@@ -47,6 +47,7 @@ class FileBrowser(tk.Tk):
         self.plated_folders = set()
         self.checked_folders = set()
         self.checked_file_entries = {}
+        self.check_state_cache = {}
         self.sort_column = "name"
         self.sort_descending = False
         self.detail_render_token = 0
@@ -1026,6 +1027,7 @@ class FileBrowser(tk.Tk):
         self.plated_folders.clear()
         self.checked_folders.clear()
         self.checked_file_entries.clear()
+        self.invalidate_check_states()
         if plate_root and self.entries:
             self.plated_folders.add("/")
         self.build_structure()
@@ -1363,7 +1365,8 @@ class FileBrowser(tk.Tk):
         return any(unit != "keep" for unit in self.profile.size_units.values())
 
     def folder_icon(self, path):
-        check_icon = self.icons.get("check_on" if path in self.checked_folders else "check_off")
+        state = self.folder_check_state(path)
+        check_icon = self.icons.get({"on": "check_on", "partial": "check_partial"}.get(state, "check_off"))
         parts = [check_icon, self.folder_base_icon(path)]
         if path in self.compare_detail_by_path:
             parts.append(self.icons.get("info"))
@@ -1483,8 +1486,10 @@ class FileBrowser(tk.Tk):
         return left
 
     def toggle_folder_checked(self, path):
-        checked = path not in self.checked_folders
-        self.set_folder_checked_recursive(path, checked)
+        # A partially checked folder becomes fully checked; only a fully
+        # checked folder is unchecked (both cascade to all children).
+        state = self.folder_check_state(path)
+        self.set_folder_checked_recursive(path, state != "on")
         self.refresh_tree_labels()
         self.update_visible_detail_check_icons()
         self.report_checked_status()
@@ -1504,6 +1509,40 @@ class FileBrowser(tk.Tk):
                 walk(child)
 
         walk(path)
+        self.invalidate_check_states()
+
+    def invalidate_check_states(self):
+        self.check_state_cache = {}
+
+    def folder_check_stats(self, folder):
+        cached = self.check_state_cache.get(folder)
+        if cached is not None:
+            return cached
+
+        checked = 0
+        total = 0
+        for entry in self.folder_entries.get(folder, []):
+            total += 1
+            if id(entry) in self.checked_file_entries:
+                checked += 1
+        for child in self.tree_data.get(folder, set()):
+            child_checked, child_total = self.folder_check_stats(child)
+            checked += child_checked + (1 if child in self.checked_folders else 0)
+            total += child_total + 1
+
+        self.check_state_cache[folder] = (checked, total)
+        return checked, total
+
+    def folder_check_state(self, path):
+        checked_self = path in self.checked_folders
+        checked, total = self.folder_check_stats(path)
+        if total == 0:
+            return "on" if checked_self else "off"
+        if checked_self and checked == total:
+            return "on"
+        if not checked_self and checked == 0:
+            return "off"
+        return "partial"
 
     def update_visible_detail_check_icons(self):
         for iid in self.details.get_children():
@@ -1515,8 +1554,11 @@ class FileBrowser(tk.Tk):
             del self.checked_file_entries[key]
         else:
             self.checked_file_entries[key] = entry
-        if iid:
-            self.update_detail_row_icon(iid)
+        self.invalidate_check_states()
+        # Ancestor folders may switch between checked/partial, so refresh
+        # the sidebar and all visible detail rows, not just this one.
+        self.refresh_tree_labels()
+        self.update_visible_detail_check_icons()
         self.report_checked_status()
 
     def checked_item_count(self):
@@ -1545,6 +1587,7 @@ class FileBrowser(tk.Tk):
                 changed = True
         if not changed:
             return
+        self.invalidate_check_states()
         self.refresh_tree_labels()
         self.update_visible_detail_check_icons()
         self.report_checked_status()
@@ -1554,6 +1597,7 @@ class FileBrowser(tk.Tk):
             return
         self.checked_folders.clear()
         self.checked_file_entries.clear()
+        self.invalidate_check_states()
         self.refresh_tree_labels()
         self.update_visible_detail_check_icons()
         self.status_var.set("Cleared all checkboxes.")
@@ -1565,15 +1609,15 @@ class FileBrowser(tk.Tk):
         if iid in self.detail_folder_by_iid:
             sub = self.detail_folder_by_iid[iid]
             base = self.detail_icon_for_path(sub, self.icons["folder"])
-            checked = sub in self.checked_folders
+            check_state = self.folder_check_state(sub)
         else:
             entry = self.detail_entry_by_iid.get(iid)
             if not entry:
                 return
             ext = os.path.splitext(entry.name)[1].lower()
             base = self.detail_icon_for_path(entry.full_path, self.icons.get(ext, self.icons["default"]))
-            checked = id(entry) in self.checked_file_entries
-        icon = self.detail_numbered_icon(row_number, base, checked=checked)
+            check_state = "on" if id(entry) in self.checked_file_entries else "off"
+        icon = self.detail_numbered_icon(row_number, base, check_state=check_state)
         if icon:
             self.details.item(iid, image=icon)
 
@@ -1687,7 +1731,7 @@ class FileBrowser(tk.Tk):
                 name = display_name(sub)
                 compare_tag = self.compare_tag_for_path(sub)
                 tags = (compare_tag,) if compare_tag else ()
-                icon = self.detail_numbered_icon(row_number, self.detail_icon_for_path(sub, self.icons["folder"]), checked=sub in self.checked_folders)
+                icon = self.detail_numbered_icon(row_number, self.detail_icon_for_path(sub, self.icons["folder"]), check_state=self.folder_check_state(sub))
                 iid = self.tree_insert(
                     self.details,
                     "",
@@ -1704,7 +1748,7 @@ class FileBrowser(tk.Tk):
             entry = payload
             display = self.entry_display_name(entry, self.detail_plate_mode)
             ext = os.path.splitext(entry.name)[1].lower()
-            icon = self.detail_numbered_icon(row_number, self.detail_icon_for_path(entry.full_path, self.icons.get(ext, self.icons["default"])), checked=id(entry) in self.checked_file_entries)
+            icon = self.detail_numbered_icon(row_number, self.detail_icon_for_path(entry.full_path, self.icons.get(ext, self.icons["default"])), check_state="on" if id(entry) in self.checked_file_entries else "off")
             values = tuple(entry.metadata.get(column, "") for column in self.metadata_columns)
             deleted = any(looks_deleted(entry.metadata.get(column)) for column in self.metadata_columns if "deleted" in column.lower() or "geloescht" in column.lower() or "gel\u00f6scht" in column.lower())
             tags = []
@@ -1789,9 +1833,9 @@ class FileBrowser(tk.Tk):
         except tk.TclError:
             return max(DETAIL_NUMBER_MIN_WIDTH, digits * 8 + 4)
 
-    def detail_numbered_icon(self, row_number, base_icon, checked=False):
-        check_icon = self.icons.get("check_on" if checked else "check_off")
-        cache_key = ("numbered", row_number, bool(checked), self.detail_number_width, str(base_icon))
+    def detail_numbered_icon(self, row_number, base_icon, check_state="off"):
+        check_icon = self.icons.get({"on": "check_on", "partial": "check_partial"}.get(check_state, "check_off"))
+        cache_key = ("numbered", row_number, check_state, self.detail_number_width, str(base_icon))
         if cache_key in self.detail_number_icon_cache:
             return self.detail_number_icon_cache[cache_key]
 
@@ -2631,15 +2675,18 @@ class FileBrowser(tk.Tk):
     def open_tree_export_dialog(self, root, tree_data, folder_entries, root_label, scope_label, selection=False, checked_items=None):
         checked_entries, checked_roots = checked_items or ([], [])
         checked_count = len(checked_entries) + len(checked_roots)
-        dialog = TreeExportDialog(self, scope_label, has_sizes=self.has_folder_sizes(), selection=selection, checked_count=checked_count)
+        dialog = TreeExportDialog(
+            self,
+            scope_label,
+            has_sizes=self.has_folder_sizes(),
+            selection=selection,
+            checked_count=checked_count,
+            allow_ancestors=root != "/",
+        )
         self.wait_window(dialog)
         options = dialog.result
         if not options:
             return
-
-        if options.get("checked_only"):
-            tree_data, folder_entries = self.structure_for_checked(checked_entries, checked_roots)
-            scope_label = f"checked items in {scope_label}"
 
         stats = compute_tree_stats(root, tree_data, folder_entries, self.entry_size_bytes)
         render_options = {
@@ -2650,6 +2697,20 @@ class FileBrowser(tk.Tk):
             "entry_size": self.entry_size_bytes,
             "stats": stats,
         }
+
+        if options.get("checked_only"):
+            # Checked items are always rendered; everything unchecked is
+            # grouped per folder into a [...] summary by the generators.
+            render_options["include_file"] = lambda entry: id(entry) in self.checked_file_entries
+            render_options["include_folder"] = lambda folder: (
+                folder in self.checked_folders or self.folder_check_stats(folder)[0] > 0
+            )
+            scope_label = f"checked items in {scope_label}"
+
+        if options.get("with_ancestors") and root != "/":
+            ancestors = [self.tree_export_root_label("/")]
+            ancestors.extend(root.strip("/").split("/")[:-1])
+            render_options["ancestors"] = ancestors
 
         action = options["action"]
         if action == "clipboard":
@@ -2676,6 +2737,7 @@ class FileBrowser(tk.Tk):
                 tree_data,
                 folder_entries,
                 source_name=os.path.basename(self.current_file or ""),
+                root_location=root.strip("/") or "/",
                 **render_options,
             )
         else:
@@ -2737,16 +2799,6 @@ class FileBrowser(tk.Tk):
             add_subtree(folder)
         for entry in entries:
             add_file(entry)
-        return tree_data, folder_entries
-
-    def structure_for_checked(self, entries, folders):
-        tree_data = {"/": set()}
-        folder_entries = {}
-        for folder in folders:
-            self.add_structure_folder(tree_data, folder)
-        for entry in entries:
-            self.add_structure_folder(tree_data, entry.folder)
-            folder_entries.setdefault(entry.folder, []).append(entry)
         return tree_data, folder_entries
 
     def copy_selected_full_paths(self):
