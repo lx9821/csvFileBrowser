@@ -1483,16 +1483,31 @@ class FileBrowser(tk.Tk):
         return left
 
     def toggle_folder_checked(self, path):
-        if path in self.checked_folders:
-            self.checked_folders.discard(path)
-        else:
-            self.checked_folders.add(path)
-        if self.tree.exists(path):
-            icon = self.folder_icon(path)
-            if icon:
-                self.tree.item(path, image=icon)
-        self.update_detail_row_icon(f"folder:{path}")
+        checked = path not in self.checked_folders
+        self.set_folder_checked_recursive(path, checked)
+        self.refresh_tree_labels()
+        self.update_visible_detail_check_icons()
         self.report_checked_status()
+
+    def set_folder_checked_recursive(self, path, checked):
+        def walk(folder):
+            if checked:
+                self.checked_folders.add(folder)
+            else:
+                self.checked_folders.discard(folder)
+            for entry in self.folder_entries.get(folder, []):
+                if checked:
+                    self.checked_file_entries[id(entry)] = entry
+                else:
+                    self.checked_file_entries.pop(id(entry), None)
+            for child in self.tree_data.get(folder, set()):
+                walk(child)
+
+        walk(path)
+
+    def update_visible_detail_check_icons(self):
+        for iid in self.details.get_children():
+            self.update_detail_row_icon(iid)
 
     def toggle_entry_checked(self, entry, iid=""):
         key = id(entry)
@@ -1516,25 +1531,22 @@ class FileBrowser(tk.Tk):
             self.status_var.set("No items checked.")
 
     def set_selection_checked(self, checked):
+        changed = False
         for iid in self.details.selection():
             if iid in self.detail_folder_by_iid:
-                path = self.detail_folder_by_iid[iid]
-                if checked:
-                    self.checked_folders.add(path)
-                else:
-                    self.checked_folders.discard(path)
-                if self.tree.exists(path):
-                    icon = self.folder_icon(path)
-                    if icon:
-                        self.tree.item(path, image=icon)
-                self.update_detail_row_icon(iid)
+                self.set_folder_checked_recursive(self.detail_folder_by_iid[iid], checked)
+                changed = True
             elif iid in self.detail_entry_by_iid:
                 entry = self.detail_entry_by_iid[iid]
                 if checked:
                     self.checked_file_entries[id(entry)] = entry
                 else:
                     self.checked_file_entries.pop(id(entry), None)
-                self.update_detail_row_icon(iid)
+                changed = True
+        if not changed:
+            return
+        self.refresh_tree_labels()
+        self.update_visible_detail_check_icons()
         self.report_checked_status()
 
     def clear_all_checks(self):
@@ -1543,7 +1555,7 @@ class FileBrowser(tk.Tk):
         self.checked_folders.clear()
         self.checked_file_entries.clear()
         self.refresh_tree_labels()
-        self.render_detail_page()
+        self.update_visible_detail_check_icons()
         self.status_var.set("Cleared all checkboxes.")
 
     def update_detail_row_icon(self, iid):
@@ -2626,7 +2638,7 @@ class FileBrowser(tk.Tk):
             return
 
         if options.get("checked_only"):
-            tree_data, folder_entries = self.structure_for_selection(checked_entries, checked_roots)
+            tree_data, folder_entries = self.structure_for_checked(checked_entries, checked_roots)
             scope_label = f"checked items in {scope_label}"
 
         stats = compute_tree_stats(root, tree_data, folder_entries, self.entry_size_bytes)
@@ -2690,32 +2702,32 @@ class FileBrowser(tk.Tk):
                 items.append(("file", self.detail_entry_by_iid[iid]))
         return items
 
+    def add_structure_folder(self, tree_data, folder):
+        folder = normalize_path(folder) or "/"
+        if folder == "/":
+            return
+        parts = folder.strip("/").split("/")
+        current = ""
+        for part in parts:
+            current += "/" + part
+            parent = parent_path(current)
+            tree_data.setdefault(parent, set()).add(current)
+            tree_data.setdefault(current, set())
+
     def structure_for_selection(self, entries, folder_roots):
         tree_data = {"/": set()}
         folder_entries = {}
         seen_files = set()
 
-        def ensure_local_folder(folder):
-            folder = normalize_path(folder) or "/"
-            if folder == "/":
-                return
-            parts = folder.strip("/").split("/")
-            current = ""
-            for part in parts:
-                current += "/" + part
-                parent = parent_path(current)
-                tree_data.setdefault(parent, set()).add(current)
-                tree_data.setdefault(current, set())
-
         def add_file(entry):
             if id(entry) in seen_files:
                 return
             seen_files.add(id(entry))
-            ensure_local_folder(entry.folder)
+            self.add_structure_folder(tree_data, entry.folder)
             folder_entries.setdefault(entry.folder, []).append(entry)
 
         def add_subtree(folder):
-            ensure_local_folder(folder)
+            self.add_structure_folder(tree_data, folder)
             for entry in self.folder_entries.get(folder, []):
                 add_file(entry)
             for child in self.tree_data.get(folder, set()):
@@ -2725,6 +2737,16 @@ class FileBrowser(tk.Tk):
             add_subtree(folder)
         for entry in entries:
             add_file(entry)
+        return tree_data, folder_entries
+
+    def structure_for_checked(self, entries, folders):
+        tree_data = {"/": set()}
+        folder_entries = {}
+        for folder in folders:
+            self.add_structure_folder(tree_data, folder)
+        for entry in entries:
+            self.add_structure_folder(tree_data, entry.folder)
+            folder_entries.setdefault(entry.folder, []).append(entry)
         return tree_data, folder_entries
 
     def copy_selected_full_paths(self):
@@ -2737,10 +2759,6 @@ class FileBrowser(tk.Tk):
 
     def checked_items_under_root(self, root):
         root = normalize_path(root) or "/"
-        for folder in self.checked_folders:
-            if folder != root and self.path_is_under_root(root, folder):
-                return [], [root]
-
         folder_roots = sorted((folder for folder in self.checked_folders if self.path_is_under_root(folder, root)), key=str.lower)
         entries = sorted(
             (entry for entry in self.checked_file_entries.values() if self.path_is_under_root(entry.full_path, root)),
