@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from .icons import set_window_icon
 from .models import (
@@ -1147,10 +1147,12 @@ class TreeExportDialog(tk.Toplevel):
     ``result`` is None on cancel, otherwise a dict with:
     action ("clipboard" | "text" | "html"), include_files (bool),
     max_depth (int, 0 = unlimited), annotate (bool), checked_only (bool),
-    with_ancestors (bool).
+    with_ancestors (bool), and report (dict with case/evidence/description/
+    logo_path/classification/classification_warning/file_details for the
+    HTML report header).
     """
 
-    def __init__(self, parent, scope_label, has_sizes=False, selection=False, checked_count=0, allow_ancestors=False):
+    def __init__(self, parent, scope_label, has_sizes=False, selection=False, checked_count=0, allow_ancestors=False, report_defaults=None):
         super().__init__(parent)
         self.title("Copy tree")
         set_window_icon(self)
@@ -1162,6 +1164,15 @@ class TreeExportDialog(tk.Toplevel):
         self.depth_var = tk.StringVar(value="0")
         self.annotate_var = tk.BooleanVar(value=False)
         self.ancestors_var = tk.BooleanVar(value=False)
+
+        report_defaults = report_defaults or {}
+        self.case_var = tk.StringVar(value=report_defaults.get("case", ""))
+        self.evidence_var = tk.StringVar(value=report_defaults.get("evidence", ""))
+        self.description_var = tk.StringVar(value=report_defaults.get("description", ""))
+        self.logo_var = tk.StringVar(value=report_defaults.get("logo_path", ""))
+        self.classification_var = tk.StringVar(value=report_defaults.get("classification", ""))
+        self.warning_var = tk.StringVar(value=report_defaults.get("classification_warning", ""))
+        self.file_details_var = tk.BooleanVar(value=bool(report_defaults.get("file_details")))
 
         self.configure(bg=COLORS["app_bg"])
         outer = ttk.Frame(self, padding=18, style="Panel.TFrame")
@@ -1225,6 +1236,46 @@ class TreeExportDialog(tk.Toplevel):
             ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
             row += 1
 
+        ttk.Label(outer, text="HTML report (optional)", style="PanelTitle.TLabel").grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(16, 6)
+        )
+        row += 1
+
+        def report_entry(label, variable):
+            nonlocal row
+            ttk.Label(outer, text=label).grid(row=row, column=0, sticky="w", padx=(0, 14), pady=2)
+            ttk.Entry(outer, textvariable=variable, width=44, style="Filter.TEntry").grid(row=row, column=1, sticky="ew", pady=2)
+            row += 1
+
+        report_entry("Case name", self.case_var)
+        report_entry("Evidence", self.evidence_var)
+        report_entry("Description", self.description_var)
+
+        ttk.Label(outer, text="Logo").grid(row=row, column=0, sticky="w", padx=(0, 14), pady=2)
+        logo_row = ttk.Frame(outer, style="Panel.TFrame")
+        logo_row.grid(row=row, column=1, sticky="ew", pady=2)
+        logo_row.columnconfigure(0, weight=1)
+        ttk.Entry(logo_row, textvariable=self.logo_var, style="Filter.TEntry").grid(row=0, column=0, sticky="ew")
+        ttk.Button(logo_row, text="Browse...", command=self.browse_logo, style="Tool.TButton").grid(row=0, column=1, padx=(8, 0))
+        row += 1
+
+        report_entry("Classification", self.classification_var)
+        report_entry("Warning line", self.warning_var)
+        ttk.Label(
+            outer,
+            text='Classification lines appear as a banner above the report, e.g. "Privileged & Confidential" / "DRAFT - FOR DISCUSSION PURPOSES ONLY".',
+            wraplength=420,
+            style="PanelMuted.TLabel",
+        ).grid(row=row, column=1, sticky="w", pady=(0, 2))
+        row += 1
+
+        ttk.Checkbutton(
+            outer,
+            text="Include file details (metadata) in the HTML report",
+            variable=self.file_details_var,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        row += 1
+
         button_row = ttk.Frame(outer, style="Panel.TFrame")
         button_row.grid(row=row, column=0, columnspan=2, sticky="e", pady=(18, 0))
         ttk.Button(button_row, text="Cancel", command=self.cancel, style="FilterGhost.TButton").pack(side="right")
@@ -1257,8 +1308,25 @@ class TreeExportDialog(tk.Toplevel):
             "annotate": bool(self.annotate_var.get()),
             "checked_only": self.scope_var.get() == "checked",
             "with_ancestors": bool(self.ancestors_var.get()),
+            "report": {
+                "case": clean_cell(self.case_var.get()),
+                "evidence": clean_cell(self.evidence_var.get()),
+                "description": clean_cell(self.description_var.get()),
+                "logo_path": clean_cell(self.logo_var.get()),
+                "classification": clean_cell(self.classification_var.get()),
+                "classification_warning": clean_cell(self.warning_var.get()),
+                "file_details": bool(self.file_details_var.get()),
+            },
         }
         self.destroy()
+
+    def browse_logo(self):
+        path = filedialog.askopenfilename(
+            parent=self,
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.gif"), ("All files", "*.*")],
+        )
+        if path:
+            self.logo_var.set(path)
 
     def cancel(self):
         self.result = None

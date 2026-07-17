@@ -50,6 +50,7 @@ def session_has_content(data):
         or data.get("plated_folders")
         or data.get("filters")
         or data.get("search")
+        or data.get("report")
     )
 
 

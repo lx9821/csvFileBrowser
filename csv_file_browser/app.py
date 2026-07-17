@@ -1,5 +1,8 @@
+import base64
 import csv
+import mimetypes
 import os
+import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
@@ -53,6 +56,8 @@ class FileBrowser(tk.Tk):
         self.show_only_checked = False
         self.current_file_md5 = ""
         self.session_save_after_id = None
+        self.import_in_progress = False
+        self.report_settings = {}
         self.sort_column = "name"
         self.sort_descending = False
         self.detail_render_token = 0
@@ -187,6 +192,8 @@ class FileBrowser(tk.Tk):
         self.breadcrumb_font = tkfont.nametofont("TkDefaultFont").copy()
         self.breadcrumb_font.configure(size=8)
         self.breadcrumb.bind("<Configure>", lambda event: self.schedule_breadcrumb_update())
+
+        self.plate_bar = tk.Frame(right, bg="#ecfdf5", bd=0, highlightthickness=1, highlightbackground="#99f6e4")
 
         self.summary_bar = ttk.Frame(right, style="HitSummary.TFrame", padding=(10, 7))
         self.summary_bar.pack(fill="x", pady=(0, 10))
@@ -525,33 +532,90 @@ class FileBrowser(tk.Tk):
             font=("TkDefaultFont", 10, "bold"),
         )
 
+    def run_in_background(self, task, on_done):
+        """Run ``task`` in a worker thread; call ``on_done(result, error)`` on
+        the Tk main thread when it finishes. The task must not touch Tk."""
+        outcome = {}
+
+        def worker():
+            try:
+                outcome["value"] = task()
+            except Exception as exc:
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        def poll():
+            if thread.is_alive():
+                self.after(80, poll)
+                return
+            on_done(outcome.get("value"), outcome.get("error"))
+
+        self.after(80, poll)
+
     def load_csv(self):
+        if self.import_in_progress:
+            return
         file_path = filedialog.askopenfilename(filetypes=[("Supported files", "*.csv *.txt"), ("CSV", "*.csv"), ("Tree text", "*.txt"), ("All files", "*.*")])
         if not file_path:
             return
 
         file_name = os.path.basename(file_path)
-        self.set_busy(f"Loading {file_name}...", overlay=True)
-        tree_error = None
-        if os.path.splitext(file_path)[1].lower() in {".txt", ".tree"}:
-            try:
-                self.import_tree_listing(file_path)
-                return
-            except Exception as exc:
-                tree_error = exc
+        self.set_busy(f"Reading {file_name}...", overlay=True)
+        is_tree = os.path.splitext(file_path)[1].lower() in {".txt", ".tree"}
 
-        try:
-            self.set_busy(f"Reading {file_name}...", overlay=True)
+        def task():
+            if is_tree:
+                try:
+                    entries, encoding = read_tree_listing(file_path)
+                    return {"kind": "tree", "entries": entries, "encoding": encoding, "md5": file_md5(file_path)}
+                except Exception as tree_error:
+                    try:
+                        headers, rows, encoding, delimiter = read_csv_rows(file_path)
+                    except Exception as csv_error:
+                        raise ValueError(f"Tree text: {tree_error}\nCSV: {csv_error}")
+                    return {
+                        "kind": "csv",
+                        "headers": headers,
+                        "rows": rows,
+                        "encoding": encoding,
+                        "delimiter": delimiter,
+                        "md5": file_md5(file_path),
+                    }
             headers, rows, encoding, delimiter = read_csv_rows(file_path)
-            csv_md5 = file_md5(file_path)
-        except Exception as exc:
-            self.clear_busy()
-            if tree_error:
-                messagebox.showerror("File could not be loaded", f"Tree text: {tree_error}\nCSV: {exc}")
+            return {
+                "kind": "csv",
+                "headers": headers,
+                "rows": rows,
+                "encoding": encoding,
+                "delimiter": delimiter,
+                "md5": file_md5(file_path),
+            }
+
+        def on_done(result, error):
+            self.import_in_progress = False
+            if error:
+                self.clear_busy()
+                title = "File could not be loaded" if is_tree else "CSV could not be loaded"
+                messagebox.showerror(title, str(error))
+                self.status_var.set("Import failed.")
+                return
+            if result["kind"] == "tree":
+                self.finish_tree_import(file_path, result)
             else:
-                messagebox.showerror("CSV could not be loaded", str(exc))
-            self.status_var.set("Import failed.")
-            return
+                self.finish_csv_import(file_path, result)
+
+        self.import_in_progress = True
+        self.run_in_background(task, on_done)
+
+    def finish_csv_import(self, file_path, result):
+        file_name = os.path.basename(file_path)
+        headers = result["headers"]
+        rows = result["rows"]
+        encoding = result["encoding"]
+        delimiter = result["delimiter"]
+        csv_md5 = result["md5"]
         self.clear_busy()
         self.begin_import_session_guard()
 
@@ -638,11 +702,11 @@ class FileBrowser(tk.Tk):
         except OSError:
             return
 
-    def import_tree_listing(self, file_path):
+    def finish_tree_import(self, file_path, result):
         file_name = os.path.basename(file_path)
-        self.set_busy(f"Reading {file_name}...", overlay=True)
-        entries, encoding = read_tree_listing(file_path)
-        csv_md5 = file_md5(file_path)
+        entries = result["entries"]
+        encoding = result["encoding"]
+        csv_md5 = result["md5"]
         self.begin_import_session_guard()
 
         self.current_file = file_path
@@ -671,6 +735,8 @@ class FileBrowser(tk.Tk):
         self.offer_session_restore()
 
     def load_compare_file(self):
+        if self.import_in_progress:
+            return
         if not self.entries or not self.import_kind:
             messagebox.showinfo("No file loaded", "Import a CSV or tree text file first.")
             return
@@ -686,26 +752,33 @@ class FileBrowser(tk.Tk):
 
         file_name = os.path.basename(file_path)
         self.set_busy(f"Reading compare file {file_name}...", overlay=True)
-        try:
+
+        def task():
             if self.import_kind == "tree":
                 compare_entries, _encoding = read_tree_listing(file_path)
-            else:
-                headers, rows, _encoding, _delimiter = read_csv_rows(file_path)
-                if headers != self.headers:
-                    self.clear_busy()
-                    messagebox.showerror("Compare not possible", "CSV columns must match exactly.")
-                    return
-                compare_entries = [
-                    entry
-                    for row in rows
-                    if (entry := self.entry_from_row(row, self.profile, self.metadata_columns))
-                ]
-        except Exception as exc:
-            self.clear_busy()
-            messagebox.showerror("Compare failed", str(exc))
-            return
-        self.clear_busy()
+                return compare_entries
+            headers, rows, _encoding, _delimiter = read_csv_rows(file_path)
+            if headers != self.headers:
+                raise ValueError("CSV columns must match exactly.")
+            return [
+                entry
+                for row in rows
+                if (entry := self.entry_from_row(row, self.profile, self.metadata_columns))
+            ]
 
+        def on_done(compare_entries, error):
+            self.import_in_progress = False
+            self.clear_busy()
+            if error:
+                messagebox.showerror("Compare failed", str(error))
+                return
+            self.continue_compare(file_path, compare_entries)
+
+        self.import_in_progress = True
+        self.run_in_background(task, on_done)
+
+    def continue_compare(self, file_path, compare_entries):
+        file_name = os.path.basename(file_path)
         first_roots = self.folder_choices_for_entries(self.base_entries or self.entries)
         second_roots = self.folder_choices_for_entries(compare_entries)
         dialog = CompareRootDialog(self, first_roots, second_roots, bool(self.metadata_columns))
@@ -1062,6 +1135,7 @@ class FileBrowser(tk.Tk):
         self.update_checked_button()
         if plate_root and self.entries:
             self.plated_folders.add("/")
+        self.update_plate_bar()
         self.build_structure()
         self.configure_detail_columns()
         self.build_tree()
@@ -1762,6 +1836,7 @@ class FileBrowser(tk.Tk):
     def begin_import_session_guard(self):
         """Detach session persistence from the previous file before an import."""
         self.current_file_md5 = ""
+        self.report_settings = {}
         if self.session_save_after_id is not None:
             self.after_cancel(self.session_save_after_id)
             self.session_save_after_id = None
@@ -1792,6 +1867,7 @@ class FileBrowser(tk.Tk):
                 {"column": clause.column, "operator": clause.operator, "value": clause.value, "logical": clause.logical}
                 for clause in self.normalized_filter_clauses()
             ],
+            "report": {key: value for key, value in (self.report_settings or {}).items() if value},
         }
 
     def offer_session_restore(self):
@@ -1850,10 +1926,12 @@ class FileBrowser(tk.Tk):
             for entry in entries_by_path.get(path, []):
                 self.checked_file_entries[id(entry)] = entry
 
+        self.report_settings = dict(data.get("report") or {})
         self.invalidate_check_states()
         self.update_filter_button()
         self.update_sort_headings()
         self.update_checked_button()
+        self.update_plate_bar()
         self.refresh_tree_labels()
         self.refresh_details()
         count = self.checked_item_count()
@@ -1902,9 +1980,94 @@ class FileBrowser(tk.Tk):
             else:
                 self.plated_folders = {path}
 
+        self.after_plate_change()
+
+    def remove_plate(self, path):
+        if path not in self.plated_folders:
+            return
+        self.plated_folders.discard(path)
+        self.after_plate_change()
+
+    def clear_all_plates(self):
+        if not self.plated_folders:
+            return
+        self.plated_folders.clear()
+        self.after_plate_change()
+
+    def after_plate_change(self):
         self.refresh_tree_labels()
         self.refresh_details()
+        self.update_plate_bar()
         self.schedule_session_save()
+
+    def update_plate_bar(self):
+        if not hasattr(self, "plate_bar"):
+            return
+        for widget in self.plate_bar.winfo_children():
+            widget.destroy()
+
+        if not self.plated_folders:
+            if self.plate_bar.winfo_ismapped():
+                self.plate_bar.pack_forget()
+            return
+
+        bg = self.plate_bar.cget("bg")
+        tk.Label(
+            self.plate_bar,
+            text="Plates:",
+            bg=bg,
+            fg="#0f766e",
+            font=("TkDefaultFont", 10, "bold"),
+            padx=10,
+            pady=6,
+        ).pack(side="left")
+
+        for path in sorted(self.plated_folders, key=str.lower):
+            chip = tk.Frame(self.plate_bar, bg="#ccfbf1", bd=0)
+            chip.pack(side="left", padx=(0, 6), pady=5)
+            name_label = tk.Label(
+                chip,
+                text=display_name(path),
+                bg="#ccfbf1",
+                fg="#0f766e",
+                font=("TkDefaultFont", 9, "bold"),
+                padx=8,
+                pady=3,
+                cursor="hand2",
+            )
+            name_label.pack(side="left")
+            name_label.bind("<Button-1>", lambda _event, p=path: self.select_path(p))
+            Tooltip(name_label, f"{path}\nClick to open this folder in the tree.")
+            close_label = tk.Label(
+                chip,
+                text="✕",
+                bg="#ccfbf1",
+                fg="#b42318",
+                font=("TkDefaultFont", 9, "bold"),
+                padx=6,
+                pady=3,
+                cursor="hand2",
+            )
+            close_label.pack(side="left")
+            close_label.bind("<Button-1>", lambda _event, p=path: self.remove_plate(p))
+            Tooltip(close_label, "Remove this plate.")
+
+        clear_button = tk.Label(
+            self.plate_bar,
+            text="Clear all",
+            bg=bg,
+            fg="#b42318",
+            font=("TkDefaultFont", 9, "bold"),
+            padx=10,
+            pady=6,
+            cursor="hand2",
+        )
+        clear_button.pack(side="right")
+        clear_button.bind("<Button-1>", lambda _event: self.clear_all_plates())
+
+        if not self.plate_bar.winfo_ismapped():
+            anchor = self.summary_bar if self.summary_bar.winfo_ismapped() else self.details_frame
+            self.plate_bar.pack(fill="x", pady=(0, 10), before=anchor)
 
     def on_select(self, event):
         selected = self.tree.focus()
@@ -2982,11 +3145,15 @@ class FileBrowser(tk.Tk):
             selection=selection,
             checked_count=checked_count,
             allow_ancestors=root != "/",
+            report_defaults=self.report_settings,
         )
         self.wait_window(dialog)
         options = dialog.result
         if not options:
             return
+
+        self.report_settings = dict(options.get("report") or {})
+        self.schedule_session_save()
 
         stats = compute_tree_stats(root, tree_data, folder_entries, self.entry_size_bytes)
         render_options = {
@@ -3031,6 +3198,8 @@ class FileBrowser(tk.Tk):
             return
 
         if action == "html":
+            report = dict(self.report_settings)
+            report["logo_data"] = self.logo_data_uri(report.get("logo_path", ""))
             content = generate_tree_html(
                 root,
                 root_label,
@@ -3038,6 +3207,9 @@ class FileBrowser(tk.Tk):
                 folder_entries,
                 source_name=os.path.basename(self.current_file or ""),
                 root_location=root.strip("/") or "/",
+                file_details=bool(report.get("file_details")),
+                metadata_columns=list(self.metadata_columns),
+                report=report,
                 **render_options,
             )
         else:
@@ -3050,6 +3222,20 @@ class FileBrowser(tk.Tk):
             messagebox.showerror("Export failed", str(exc))
             return
         self.status_var.set(f"Exported tree for {scope_label} to {export_path}.")
+
+    def logo_data_uri(self, path):
+        if not path:
+            return ""
+        try:
+            with open(path, "rb") as handle:
+                payload = handle.read()
+        except OSError as exc:
+            messagebox.showwarning("Logo not loaded", f"The logo could not be read and will be skipped:\n{exc}")
+            return ""
+        mime = mimetypes.guess_type(path)[0]
+        if not mime or not mime.startswith("image/"):
+            mime = "image/png"
+        return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
 
     def safe_export_name(self, label):
         cleaned = "".join(char if char.isalnum() or char in "._- " else "_" for char in label).strip().replace(" ", "_")

@@ -191,6 +191,18 @@ h1 { margin:0 0 4px; font-size:18px; }
 .controls button { padding:7px 12px; border:1px solid var(--border); border-radius:6px; background:var(--panel); color:var(--text); cursor:pointer; font-size:13px; }
 .controls button:hover { background:#eef2f7; }
 main { padding:16px 24px 40px; }
+.banner { background:#0b1020; padding:10px 24px; font-size:14px; }
+.banner .line1 { color:#e5e7eb; font-style:italic; }
+.banner .line2 { color:#ef4444; font-weight:800; letter-spacing:.4px; }
+.header-row { display:flex; align-items:center; gap:16px; }
+.logo { max-height:56px; max-width:220px; object-fit:contain; flex:0 0 auto; }
+.caseinfo { margin-top:6px; font-size:13px; }
+.caseinfo .desc { color:var(--muted); margin-top:2px; }
+details.file > summary { padding:1px 4px; border-radius:4px; }
+details.file > summary:hover { background:#eef2f7; }
+table.props { border-collapse:collapse; margin:4px 0 8px 30px; font-size:12px; }
+table.props th { text-align:left; color:var(--muted); font-weight:600; padding:2px 14px 2px 0; vertical-align:top; white-space:nowrap; }
+table.props td { padding:2px 0; word-break:break-word; }
 #tree { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px 16px; font-size:14px; line-height:1.7; overflow-x:auto; }
 details details, .children > .file, .children > .more { margin-left:22px; }
 summary { cursor:pointer; user-select:none; border-radius:4px; padding:1px 4px; white-space:nowrap; }
@@ -203,9 +215,16 @@ summary:hover { background:#eef2f7; }
 </style>
 </head>
 <body>
+__BANNER__
 <header>
+<div class="header-row">
+__LOGO__
+<div class="header-text">
 <h1>__TITLE__</h1>
 <div class="sub">__SUBTITLE__</div>
+__CASEINFO__
+</div>
+</div>
 <div class="controls">
 <input id="filter" type="search" placeholder="Filter by name...">
 <button type="button" onclick="setAll(true)">Expand all</button>
@@ -276,6 +295,9 @@ def generate_tree_html(
     include_folder=None,
     ancestors=None,
     root_location="",
+    file_details=False,
+    metadata_columns=None,
+    report=None,
 ):
     """Render the structure below ``root`` as a standalone interactive HTML page.
 
@@ -284,12 +306,19 @@ def generate_tree_html(
     the chain of parent folders above the root. ``include_file``/
     ``include_folder`` filter items; filtered-out content is grouped per
     folder into a ``[…]`` summary entry.
+
+    ``file_details`` renders each file as a collapsible entry with its
+    metadata (``metadata_columns`` gives the column order). ``report`` is an
+    optional dict with case/evidence/description text, a ``logo_data`` data
+    URI shown top-left, and ``classification``/``classification_warning``
+    lines rendered as a banner above the header.
     """
     entry_size = entry_size or (lambda entry: 0)
     if stats is None:
         stats = compute_tree_stats(root, tree_data, folder_entries, entry_size)
 
     parts = []
+    report = report or {}
 
     def folder_meta(folder):
         file_count, folder_count, size = stats.get(folder, (0, 0, 0))
@@ -297,6 +326,16 @@ def generate_tree_html(
         if show_sizes:
             pieces.append(format_size_bytes(size))
         return ", ".join(pieces)
+
+    def file_detail_rows(entry):
+        rows = []
+        if entry.full_path:
+            rows.append(f"<tr><th>Full path</th><td>{html.escape(entry.full_path)}</td></tr>")
+        for column in metadata_columns or sorted(entry.metadata):
+            value = str(entry.metadata.get(column, "") or "").strip()
+            if value:
+                rows.append(f"<tr><th>{html.escape(column)}</th><td>{html.escape(value)}</td></tr>")
+        return "".join(rows)
 
     def append_folder(folder, depth):
         name = root_label if folder == root else display_name(folder)
@@ -331,10 +370,17 @@ def generate_tree_html(
                         continue
                     size = entry_size(entry)
                     meta_span = f'<span class="meta">{format_size_bytes(size)}</span>' if show_sizes and size else ""
-                    parts.append(
-                        f'<div class="file" data-name="{html.escape(entry.name.lower(), quote=True)}">'
-                        f'<span class="icon">\U0001f4dc</span>{html.escape(entry.name)}{meta_span}</div>'
-                    )
+                    name_attr = html.escape(entry.name.lower(), quote=True)
+                    label = f'<span class="icon">\U0001f4dc</span>{html.escape(entry.name)}{meta_span}'
+                    detail_rows = file_detail_rows(entry) if file_details else ""
+                    if detail_rows:
+                        parts.append(
+                            f'<details class="file" data-name="{name_attr}">'
+                            f'<summary>{label}</summary>'
+                            f'<table class="props">{detail_rows}</table></details>'
+                        )
+                    else:
+                        parts.append(f'<div class="file" data-name="{name_attr}">{label}</div>')
             else:
                 omitted_files = 0
             omitted_stats = (omitted_files, omitted_folders, omitted_size)
@@ -353,6 +399,9 @@ def generate_tree_html(
         parts.append("</div></details>")
 
     title = f"Tree - {root_location}" if root_location else f"Tree - {root_label}"
+    case_name = str(report.get("case", "") or "").strip()
+    if case_name:
+        title = f"{case_name} - {title}"
     subtitle_parts = []
     if root_location:
         subtitle_parts.append(f"Location: {root_location}")
@@ -364,9 +413,36 @@ def generate_tree_html(
     if not include_files:
         subtitle_parts.append("folders only")
 
+    banner_lines = []
+    classification = str(report.get("classification", "") or "").strip()
+    warning = str(report.get("classification_warning", "") or "").strip()
+    if classification:
+        banner_lines.append(f'<div class="line1">{html.escape(classification)}</div>')
+    if warning:
+        banner_lines.append(f'<div class="line2">{html.escape(warning)}</div>')
+    banner_html = f'<div class="banner">{"".join(banner_lines)}</div>' if banner_lines else ""
+
+    logo_data = str(report.get("logo_data", "") or "")
+    logo_html = f'<img class="logo" src="{logo_data}" alt="logo">' if logo_data.startswith("data:image/") else ""
+
+    case_bits = []
+    if case_name:
+        case_bits.append(f"<strong>Case:</strong> {html.escape(case_name)}")
+    evidence = str(report.get("evidence", "") or "").strip()
+    if evidence:
+        case_bits.append(f"<strong>Evidence:</strong> {html.escape(evidence)}")
+    description = str(report.get("description", "") or "").strip()
+    caseinfo_html = ""
+    if case_bits or description:
+        desc_html = f'<div class="desc">{html.escape(description)}</div>' if description else ""
+        caseinfo_html = f'<div class="caseinfo">{" · ".join(case_bits)}{desc_html}</div>'
+
     return (
         HTML_TEMPLATE
         .replace("__TITLE__", html.escape(title))
         .replace("__SUBTITLE__", html.escape(" · ".join(subtitle_parts)))
+        .replace("__BANNER__", banner_html)
+        .replace("__LOGO__", logo_html)
+        .replace("__CASEINFO__", caseinfo_html)
         .replace("__BODY__", "\n".join(parts))
     )
