@@ -145,6 +145,32 @@ def load_icons():
             image.put(shadow, point)
         return image
 
+    def create_checkbox_icon(checked):
+        image = tk.PhotoImage(width=ICON_SIZE[0], height=ICON_SIZE[1])
+        left, top = 2, 2
+        right, bottom = ICON_SIZE[0] - 3, ICON_SIZE[1] - 3
+        if checked:
+            accent = COLORS["accent"]
+            for y in range(top, bottom + 1):
+                for x in range(left, right + 1):
+                    image.put(accent, (x, y))
+            mark = "#ffffff"
+            for x, y in ((5, 9), (6, 10), (7, 11), (8, 10), (9, 9), (10, 8), (11, 7), (12, 6)):
+                image.put(mark, (x, y))
+                image.put(mark, (x, y + 1))
+        else:
+            border = "#64748b"
+            for y in range(top + 1, bottom):
+                for x in range(left + 1, right):
+                    image.put("#ffffff", (x, y))
+            for x in range(left, right + 1):
+                image.put(border, (x, top))
+                image.put(border, (x, bottom))
+            for y in range(top, bottom + 1):
+                image.put(border, (left, y))
+                image.put(border, (right, y))
+        return image
+
     icons["folder"] = load("folder.png")
     icons["default"] = load("files.png")
     icons["filter"] = load("filter.png")
@@ -158,6 +184,8 @@ def load_icons():
     icons["sort_desc"] = create_sort_icon("desc")
     icons["info"] = create_info_icon()
     icons["edit"] = create_edit_icon()
+    icons["check_on"] = create_checkbox_icon(True)
+    icons["check_off"] = create_checkbox_icon(False)
 
     mapping = {
         ".pdf": "pdf.png",

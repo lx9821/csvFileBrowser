@@ -45,6 +45,8 @@ class FileBrowser(tk.Tk):
         self.compare_detail_by_path = {}
         self.compare_summary = {}
         self.plated_folders = set()
+        self.checked_folders = set()
+        self.checked_file_entries = {}
         self.sort_column = "name"
         self.sort_descending = False
         self.detail_render_token = 0
@@ -250,6 +252,7 @@ class FileBrowser(tk.Tk):
         self.item_context_menu.add_command(label="Properties", command=self.show_context_item_properties)
         self.item_context_menu.add_separator()
         self.item_context_menu.add_command(label="Export current view to CSV", command=self.export_current_view_csv)
+        self.item_context_menu.add_command(label="Export checked items to CSV", command=self.export_checked_csv)
 
         self.detail_folder_context_menu = tk.Menu(self, tearoff=0)
         self.detail_folder_context_menu.add_command(label="Copy tree...", command=self.open_context_folder_tree_dialog)
@@ -258,16 +261,24 @@ class FileBrowser(tk.Tk):
         self.detail_folder_context_menu.add_command(label="Copy all child items", command=lambda: self.copy_context_folder_children(True))
         self.detail_folder_context_menu.add_separator()
         self.detail_folder_context_menu.add_command(label="Export current view to CSV", command=self.export_current_view_csv)
+        self.detail_folder_context_menu.add_command(label="Export checked items to CSV", command=self.export_checked_csv)
 
         self.selection_context_menu = tk.Menu(self, tearoff=0)
         self.selection_context_menu.add_command(label="Copy tree of selection...", command=self.open_selection_tree_dialog)
         self.selection_context_menu.add_command(label="Copy full paths", command=self.copy_selected_full_paths)
         self.selection_context_menu.add_separator()
+        self.selection_context_menu.add_command(label="Check selected items", command=lambda: self.set_selection_checked(True))
+        self.selection_context_menu.add_command(label="Uncheck selected items", command=lambda: self.set_selection_checked(False))
+        self.selection_context_menu.add_separator()
         self.selection_context_menu.add_command(label="Export selection to CSV", command=self.export_selected_csv)
+        self.selection_context_menu.add_command(label="Export checked items to CSV", command=self.export_checked_csv)
         self.selection_context_menu.add_command(label="Export current view to CSV", command=self.export_current_view_csv)
 
         self.details_context_menu = tk.Menu(self, tearoff=0)
         self.details_context_menu.add_command(label="Export current view to CSV", command=self.export_current_view_csv)
+        self.details_context_menu.add_command(label="Export checked items to CSV", command=self.export_checked_csv)
+        self.details_context_menu.add_separator()
+        self.details_context_menu.add_command(label="Clear checkboxes", command=self.clear_all_checks)
 
 
     def _build_import_screen(self):
@@ -406,6 +417,10 @@ class FileBrowser(tk.Tk):
         style.configure("FilterChipMore.TLabel", background="#f8fafc", foreground="#64748b", font=("TkDefaultFont", 9, "bold"))
         style.configure("Status.TLabel", background=COLORS["app_bg"], foreground=COLORS["muted"], font=("TkDefaultFont", 10))
         style.configure("TLabel", background=COLORS["panel"], foreground=COLORS["text"])
+        style.configure("TCheckbutton", background=COLORS["panel"], foreground=COLORS["text"], focuscolor=COLORS["panel"])
+        style.map("TCheckbutton", background=[("active", COLORS["panel"])])
+        style.configure("TRadiobutton", background=COLORS["panel"], foreground=COLORS["text"], focuscolor=COLORS["panel"])
+        style.map("TRadiobutton", background=[("active", COLORS["panel"])])
         style.configure("TButton", padding=(12, 7), borderwidth=0)
         style.configure("Mini.TButton", padding=(7, 4), borderwidth=0)
         style.configure("MiniDanger.TButton", padding=(7, 4), borderwidth=0, foreground=COLORS["danger"])
@@ -1009,6 +1024,8 @@ class FileBrowser(tk.Tk):
         if not preserve_base:
             self.base_entries = list(self.entries)
         self.plated_folders.clear()
+        self.checked_folders.clear()
+        self.checked_file_entries.clear()
         if plate_root and self.entries:
             self.plated_folders.add("/")
         self.build_structure()
@@ -1346,10 +1363,32 @@ class FileBrowser(tk.Tk):
         return any(unit != "keep" for unit in self.profile.size_units.values())
 
     def folder_icon(self, path):
-        base_icon = self.folder_base_icon(path)
+        check_icon = self.icons.get("check_on" if path in self.checked_folders else "check_off")
+        parts = [check_icon, self.folder_base_icon(path)]
         if path in self.compare_detail_by_path:
-            return self.tree_compare_icon(base_icon)
-        return base_icon
+            parts.append(self.icons.get("info"))
+        return self.compose_row_icon(parts)
+
+    def compose_row_icon(self, parts):
+        parts = [part for part in parts if part]
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+
+        cache_key = tuple(str(part) for part in parts)
+        if cache_key in self.diff_icon_cache:
+            return self.diff_icon_cache[cache_key]
+
+        width = sum(part.width() for part in parts) + TREE_ICON_GAP * (len(parts) - 1)
+        height = max(ICON_SIZE[1], max(part.height() for part in parts))
+        image = tk.PhotoImage(width=width, height=height)
+        x = 0
+        for part in parts:
+            self.copy_photo_part(image, part, x, max(0, (height - part.height()) // 2))
+            x += part.width() + TREE_ICON_GAP
+        self.diff_icon_cache[cache_key] = image
+        return image
 
     def folder_base_icon(self, path):
         if path == "/":
@@ -1359,42 +1398,6 @@ class FileBrowser(tk.Tk):
         if self.is_effectively_plated_folder(path):
             return self.icons.get("folder_plate_filled") or self.icons.get("plate_filled") or self.icons.get("folder")
         return self.icons.get("folder_plate_empty") or self.icons.get("plate_empty") or self.icons.get("folder")
-
-    def tree_compare_icon(self, base_icon):
-        info_icon = self.icons.get("info")
-        if not info_icon:
-            return base_icon
-
-        cache_key = ("tree", str(base_icon))
-        if cache_key in self.diff_icon_cache:
-            return self.diff_icon_cache[cache_key]
-
-        base_width = base_icon.width() if base_icon else 0
-        width = base_width + TREE_ICON_GAP + ICON_SIZE[0] if base_width else ICON_SIZE[0]
-        image = tk.PhotoImage(width=width, height=ICON_SIZE[1])
-
-        def copy_part(source, x):
-            if not source:
-                return
-            y = max(0, (ICON_SIZE[1] - source.height()) // 2)
-            image.tk.call(
-                image,
-                "copy",
-                str(source),
-                "-from",
-                0,
-                0,
-                source.width(),
-                source.height(),
-                "-to",
-                x,
-                y,
-            )
-
-        copy_part(base_icon, 0)
-        copy_part(info_icon, base_width + TREE_ICON_GAP if base_width else 0)
-        self.diff_icon_cache[cache_key] = image
-        return image
 
     def folder_tags(self, path):
         tags = []
@@ -1446,14 +1449,20 @@ class FileBrowser(tk.Tk):
         if not item or self.is_dummy_iid(item) or self.tree.identify_column(event.x) != "#0":
             return
 
-        # Only clicks on the item icon may toggle the plate; the expand
-        # indicator and the label keep their default Treeview behavior.
+        # Only clicks on the item icon act here; the expand indicator and the
+        # label keep their default Treeview behavior. The icon is laid out as
+        # [checkbox][plate(+folder)][info icon in compare mode].
         element = self.tree.identify_element(event.x, event.y)
         if "image" not in element:
             return
 
-        offset = event.x - self.tree_icon_left_edge(event.x, event.y)
-        if offset <= ICON_SIZE[0] + TREE_ICON_GAP // 2:
+        offset = event.x - self.treeview_icon_left_edge(self.tree, event.x, event.y)
+        check_end = ICON_SIZE[0] + TREE_ICON_GAP // 2
+        plate_end = check_end + ICON_SIZE[0] + TREE_ICON_GAP
+        if offset <= check_end:
+            self.toggle_folder_checked(item)
+            return "break"
+        if offset <= plate_end:
             shift_pressed = bool(event.state & 0x0001)
             self.toggle_plate(item, additive=shift_pressed)
             return "break"
@@ -1461,17 +1470,100 @@ class FileBrowser(tk.Tk):
         if item in self.compare_detail_by_path:
             base_icon = self.folder_base_icon(item)
             base_width = base_icon.width() if base_icon else 0
-            if offset >= base_width:
+            if offset >= ICON_SIZE[0] + TREE_ICON_GAP + base_width:
                 self.tree.selection_set(item)
                 self.tree.focus(item)
                 self.show_compare_detail(item)
                 return "break"
 
-    def tree_icon_left_edge(self, x, y):
+    def treeview_icon_left_edge(self, tree, x, y):
         left = x
-        while left > 0 and x - left < 128 and "image" in self.tree.identify_element(left - 1, y):
+        while left > 0 and x - left < 160 and "image" in tree.identify_element(left - 1, y):
             left -= 1
         return left
+
+    def toggle_folder_checked(self, path):
+        if path in self.checked_folders:
+            self.checked_folders.discard(path)
+        else:
+            self.checked_folders.add(path)
+        if self.tree.exists(path):
+            icon = self.folder_icon(path)
+            if icon:
+                self.tree.item(path, image=icon)
+        self.update_detail_row_icon(f"folder:{path}")
+        self.report_checked_status()
+
+    def toggle_entry_checked(self, entry, iid=""):
+        key = id(entry)
+        if key in self.checked_file_entries:
+            del self.checked_file_entries[key]
+        else:
+            self.checked_file_entries[key] = entry
+        if iid:
+            self.update_detail_row_icon(iid)
+        self.report_checked_status()
+
+    def checked_item_count(self):
+        return len(self.checked_folders) + len(self.checked_file_entries)
+
+    def report_checked_status(self):
+        count = self.checked_item_count()
+        if count:
+            label = "item" if count == 1 else "items"
+            self.status_var.set(f"{count:,} {label} checked.")
+        else:
+            self.status_var.set("No items checked.")
+
+    def set_selection_checked(self, checked):
+        for iid in self.details.selection():
+            if iid in self.detail_folder_by_iid:
+                path = self.detail_folder_by_iid[iid]
+                if checked:
+                    self.checked_folders.add(path)
+                else:
+                    self.checked_folders.discard(path)
+                if self.tree.exists(path):
+                    icon = self.folder_icon(path)
+                    if icon:
+                        self.tree.item(path, image=icon)
+                self.update_detail_row_icon(iid)
+            elif iid in self.detail_entry_by_iid:
+                entry = self.detail_entry_by_iid[iid]
+                if checked:
+                    self.checked_file_entries[id(entry)] = entry
+                else:
+                    self.checked_file_entries.pop(id(entry), None)
+                self.update_detail_row_icon(iid)
+        self.report_checked_status()
+
+    def clear_all_checks(self):
+        if not self.checked_item_count():
+            return
+        self.checked_folders.clear()
+        self.checked_file_entries.clear()
+        self.refresh_tree_labels()
+        self.render_detail_page()
+        self.status_var.set("Cleared all checkboxes.")
+
+    def update_detail_row_icon(self, iid):
+        if not iid or not self.details.exists(iid):
+            return
+        row_number = self.detail_page_index * DETAIL_PAGE_SIZE + self.details.index(iid) + 1
+        if iid in self.detail_folder_by_iid:
+            sub = self.detail_folder_by_iid[iid]
+            base = self.detail_icon_for_path(sub, self.icons["folder"])
+            checked = sub in self.checked_folders
+        else:
+            entry = self.detail_entry_by_iid.get(iid)
+            if not entry:
+                return
+            ext = os.path.splitext(entry.name)[1].lower()
+            base = self.detail_icon_for_path(entry.full_path, self.icons.get(ext, self.icons["default"]))
+            checked = id(entry) in self.checked_file_entries
+        icon = self.detail_numbered_icon(row_number, base, checked=checked)
+        if icon:
+            self.details.item(iid, image=icon)
 
     def toggle_plate(self, path, additive=False):
         if additive:
@@ -1545,7 +1637,7 @@ class FileBrowser(tk.Tk):
         self.detail_rendered_files = 0
         self.detail_number_icon_cache.clear()
         self.detail_number_width = self.detail_number_width_for(len(detail_items))
-        self.detail_number_icon_offset = self.detail_number_width + DETAIL_NUMBER_GAP
+        self.detail_number_icon_offset = ICON_SIZE[0] + DETAIL_NUMBER_GAP + self.detail_number_width + DETAIL_NUMBER_GAP
         self.update_no_results_state(bool(self.entries) and not detail_items and bool(query or self.column_filters))
         self.render_detail_page(self.detail_render_token)
         self.clear_busy()
@@ -1583,7 +1675,7 @@ class FileBrowser(tk.Tk):
                 name = display_name(sub)
                 compare_tag = self.compare_tag_for_path(sub)
                 tags = (compare_tag,) if compare_tag else ()
-                icon = self.detail_numbered_icon(row_number, self.detail_icon_for_path(sub, self.icons["folder"]))
+                icon = self.detail_numbered_icon(row_number, self.detail_icon_for_path(sub, self.icons["folder"]), checked=sub in self.checked_folders)
                 iid = self.tree_insert(
                     self.details,
                     "",
@@ -1600,7 +1692,7 @@ class FileBrowser(tk.Tk):
             entry = payload
             display = self.entry_display_name(entry, self.detail_plate_mode)
             ext = os.path.splitext(entry.name)[1].lower()
-            icon = self.detail_numbered_icon(row_number, self.detail_icon_for_path(entry.full_path, self.icons.get(ext, self.icons["default"])))
+            icon = self.detail_numbered_icon(row_number, self.detail_icon_for_path(entry.full_path, self.icons.get(ext, self.icons["default"])), checked=id(entry) in self.checked_file_entries)
             values = tuple(entry.metadata.get(column, "") for column in self.metadata_columns)
             deleted = any(looks_deleted(entry.metadata.get(column)) for column in self.metadata_columns if "deleted" in column.lower() or "geloescht" in column.lower() or "gel\u00f6scht" in column.lower())
             tags = []
@@ -1685,24 +1777,26 @@ class FileBrowser(tk.Tk):
         except tk.TclError:
             return max(DETAIL_NUMBER_MIN_WIDTH, digits * 8 + 4)
 
-    def detail_numbered_icon(self, row_number, base_icon):
-        if not base_icon:
-            return base_icon
-
-        cache_key = ("numbered", row_number, self.detail_number_width, str(base_icon))
+    def detail_numbered_icon(self, row_number, base_icon, checked=False):
+        check_icon = self.icons.get("check_on" if checked else "check_off")
+        cache_key = ("numbered", row_number, bool(checked), self.detail_number_width, str(base_icon))
         if cache_key in self.detail_number_icon_cache:
             return self.detail_number_icon_cache[cache_key]
 
         number_width = self.detail_number_width
-        icon_width = base_icon.width()
-        icon_height = base_icon.height()
+        check_width = check_icon.width() if check_icon else 0
+        icon_width = base_icon.width() if base_icon else 0
+        icon_height = base_icon.height() if base_icon else 0
         height = max(ICON_SIZE[1], icon_height)
-        width = number_width + DETAIL_NUMBER_GAP + icon_width
+        width = check_width + DETAIL_NUMBER_GAP + number_width + DETAIL_NUMBER_GAP + icon_width
         image = tk.PhotoImage(width=width, height=height)
 
+        if check_icon:
+            self.copy_photo_part(image, check_icon, 0, max(0, (height - check_icon.height()) // 2))
         number_image = self.render_detail_number_image(row_number, number_width, height)
-        self.copy_photo_part(image, number_image, 0, 0)
-        self.copy_photo_part(image, base_icon, number_width + DETAIL_NUMBER_GAP, max(0, (height - icon_height) // 2))
+        self.copy_photo_part(image, number_image, check_width + DETAIL_NUMBER_GAP, 0)
+        if base_icon:
+            self.copy_photo_part(image, base_icon, check_width + DETAIL_NUMBER_GAP + number_width + DETAIL_NUMBER_GAP, max(0, (height - icon_height) // 2))
 
         self.detail_number_icon_cache[cache_key] = image
         return image
@@ -1804,32 +1898,35 @@ class FileBrowser(tk.Tk):
         return image
 
     def on_details_click(self, event):
-        path = self.detail_info_path_from_event(event)
-        if path:
-            item = self.details.identify_row(event.y)
+        item = self.details.identify_row(event.y)
+        if not item or item == self.detail_loading_iid:
+            return None
+        if self.details.identify_column(event.x) != "#0":
+            return None
+
+        # The row icon is laid out as [checkbox][row number][type icon
+        # (+info icon in compare mode)]; only icon clicks act here.
+        element = self.details.identify_element(event.x, event.y)
+        if "image" not in element:
+            return None
+
+        offset = event.x - self.treeview_icon_left_edge(self.details, event.x, event.y)
+        if offset <= ICON_SIZE[0] + DETAIL_NUMBER_GAP // 2:
+            if item in self.detail_folder_by_iid:
+                self.toggle_folder_checked(self.detail_folder_by_iid[item])
+            else:
+                entry = self.detail_entry_by_iid.get(item)
+                if entry:
+                    self.toggle_entry_checked(entry, iid=item)
+            return "break"
+
+        path = self.detail_path_for_iid(item)
+        if path and path in self.compare_detail_by_path and offset >= self.detail_number_icon_offset:
             self.details.selection_set(item)
             self.details.focus(item)
             self.show_compare_detail(path)
             return "break"
         return None
-
-    def detail_info_path_from_event(self, event):
-        item = self.details.identify_row(event.y)
-        if not item or item == self.detail_loading_iid:
-            return ""
-        if self.details.identify_column(event.x) != "#0":
-            return ""
-
-        path = self.detail_path_for_iid(item)
-        if path not in self.compare_detail_by_path:
-            return ""
-
-        bbox = self.details.bbox(item, "#0")
-        if not bbox:
-            return ""
-        icon_left = bbox[0] + self.detail_number_icon_offset
-        icon_right = icon_left + max(DIFF_INFO_HITBOX_WIDTH, ICON_SIZE[0] * 2 + TREE_ICON_GAP)
-        return path if icon_left <= event.x <= icon_right else ""
 
     def detail_path_for_iid(self, iid):
         if iid in self.detail_folder_by_iid:
@@ -2431,8 +2528,10 @@ class FileBrowser(tk.Tk):
         search_entry.focus_set()
 
     def open_details_item(self, event):
-        if self.detail_info_path_from_event(event):
-            return
+        if "image" in self.details.identify_element(event.x, event.y):
+            # A double-click on the icon area (checkbox/info) acts like a
+            # second single click instead of opening the item.
+            return self.on_details_click(event)
         item = self.details.identify_row(event.y) or self.details.focus()
         if item.startswith("folder:"):
             path = item.removeprefix("folder:")
@@ -2491,7 +2590,14 @@ class FileBrowser(tk.Tk):
         if not self.context_folder_path:
             return
         root = self.context_folder_path
-        self.open_tree_export_dialog(root, self.tree_data, self.folder_entries, self.tree_export_root_label(root), display_name(root))
+        self.open_tree_export_dialog(
+            root,
+            self.tree_data,
+            self.folder_entries,
+            self.tree_export_root_label(root),
+            display_name(root),
+            checked_items=self.checked_items_under_root(root),
+        )
 
     def open_selection_tree_dialog(self):
         items = self.selected_export_items()
@@ -2510,12 +2616,18 @@ class FileBrowser(tk.Tk):
             return os.path.splitext(os.path.basename(self.current_file))[0]
         return display_name(root)
 
-    def open_tree_export_dialog(self, root, tree_data, folder_entries, root_label, scope_label, selection=False):
-        dialog = TreeExportDialog(self, scope_label, has_sizes=self.has_folder_sizes(), selection=selection)
+    def open_tree_export_dialog(self, root, tree_data, folder_entries, root_label, scope_label, selection=False, checked_items=None):
+        checked_entries, checked_roots = checked_items or ([], [])
+        checked_count = len(checked_entries) + len(checked_roots)
+        dialog = TreeExportDialog(self, scope_label, has_sizes=self.has_folder_sizes(), selection=selection, checked_count=checked_count)
         self.wait_window(dialog)
         options = dialog.result
         if not options:
             return
+
+        if options.get("checked_only"):
+            tree_data, folder_entries = self.structure_for_selection(checked_entries, checked_roots)
+            scope_label = f"checked items in {scope_label}"
 
         stats = compute_tree_stats(root, tree_data, folder_entries, self.entry_size_bytes)
         render_options = {
@@ -2622,6 +2734,28 @@ class FileBrowser(tk.Tk):
         lines = [payload + "/" if kind == "folder" else payload.full_path for kind, payload in items]
         label = "path" if len(lines) == 1 else "paths"
         self.copy_text("\n".join(lines), f"Copied {len(lines):,} {label} to the clipboard.")
+
+    def checked_items_under_root(self, root):
+        root = normalize_path(root) or "/"
+        for folder in self.checked_folders:
+            if folder != root and self.path_is_under_root(root, folder):
+                return [], [root]
+
+        folder_roots = sorted((folder for folder in self.checked_folders if self.path_is_under_root(folder, root)), key=str.lower)
+        entries = sorted(
+            (entry for entry in self.checked_file_entries.values() if self.path_is_under_root(entry.full_path, root)),
+            key=lambda entry: entry.full_path.lower(),
+        )
+        return entries, folder_roots
+
+    def checked_export_items(self):
+        items = [("folder", path) for path in sorted(self.checked_folders, key=str.lower)]
+        entries = sorted(self.checked_file_entries.values(), key=lambda entry: entry.full_path.lower())
+        items.extend(("file", entry) for entry in entries)
+        return items
+
+    def export_checked_csv(self):
+        self.export_items_csv(self.checked_export_items(), "checked", "Check one or more items first.")
 
     def copy_context_folder_children(self, recursive):
         if not self.context_folder_path:

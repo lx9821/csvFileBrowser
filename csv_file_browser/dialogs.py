@@ -1016,10 +1016,10 @@ class TreeExportDialog(tk.Toplevel):
 
     ``result`` is None on cancel, otherwise a dict with:
     action ("clipboard" | "text" | "html"), include_files (bool),
-    max_depth (int, 0 = unlimited), annotate (bool).
+    max_depth (int, 0 = unlimited), annotate (bool), checked_only (bool).
     """
 
-    def __init__(self, parent, scope_label, has_sizes=False, selection=False):
+    def __init__(self, parent, scope_label, has_sizes=False, selection=False, checked_count=0):
         super().__init__(parent)
         self.title("Copy tree")
         set_window_icon(self)
@@ -1027,6 +1027,7 @@ class TreeExportDialog(tk.Toplevel):
         self.result = None
 
         self.include_files_var = tk.StringVar(value="files")
+        self.scope_var = tk.StringVar(value="all")
         self.depth_var = tk.StringVar(value="0")
         self.annotate_var = tk.BooleanVar(value=False)
 
@@ -1039,32 +1040,53 @@ class TreeExportDialog(tk.Toplevel):
             heading = f"Tree of the selected items in {scope_label}" if scope_label else "Tree of the selected items"
         else:
             heading = f"Tree for {scope_label}" if scope_label else "Tree export"
-        ttk.Label(outer, text=heading, style="PanelTitle.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        row = 0
+        ttk.Label(outer, text=heading, style="PanelTitle.TLabel").grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        row += 1
 
-        ttk.Label(outer, text="Include").grid(row=1, column=0, sticky="nw", padx=(0, 14), pady=(0, 4))
+        ttk.Label(outer, text="Include").grid(row=row, column=0, sticky="nw", padx=(0, 14), pady=(0, 4))
         include_options = ttk.Frame(outer, style="Panel.TFrame")
-        include_options.grid(row=1, column=1, sticky="w", pady=(0, 4))
+        include_options.grid(row=row, column=1, sticky="w", pady=(0, 4))
         ttk.Radiobutton(include_options, text="Folders and files", variable=self.include_files_var, value="files").pack(anchor="w")
         ttk.Radiobutton(include_options, text="Folders only", variable=self.include_files_var, value="folders").pack(anchor="w", pady=(3, 0))
+        row += 1
 
-        ttk.Label(outer, text="Maximum depth").grid(row=2, column=0, sticky="w", padx=(0, 14), pady=(10, 0))
+        if checked_count:
+            ttk.Label(outer, text="Items").grid(row=row, column=0, sticky="nw", padx=(0, 14), pady=(10, 0))
+            scope_options = ttk.Frame(outer, style="Panel.TFrame")
+            scope_options.grid(row=row, column=1, sticky="w", pady=(10, 0))
+            ttk.Radiobutton(scope_options, text="All items", variable=self.scope_var, value="all").pack(anchor="w")
+            checked_label = f"Only checked items ({checked_count:,})"
+            ttk.Radiobutton(scope_options, text=checked_label, variable=self.scope_var, value="checked").pack(anchor="w", pady=(3, 0))
+            ttk.Label(
+                outer,
+                text="Checked folders include their entire subtree.",
+                wraplength=420,
+                style="PanelMuted.TLabel",
+            ).grid(row=row + 1, column=1, sticky="w", pady=(2, 0))
+            row += 2
+
+        ttk.Label(outer, text="Maximum depth").grid(row=row, column=0, sticky="w", padx=(0, 14), pady=(10, 0))
         depth_row = ttk.Frame(outer, style="Panel.TFrame")
-        depth_row.grid(row=2, column=1, sticky="w", pady=(10, 0))
+        depth_row.grid(row=row, column=1, sticky="w", pady=(10, 0))
         ttk.Spinbox(depth_row, from_=0, to=999, textvariable=self.depth_var, width=6).pack(side="left")
         ttk.Label(depth_row, text="0 = all levels", style="PanelMuted.TLabel").pack(side="left", padx=(10, 0))
+        row += 1
 
         ttk.Label(
             outer,
             text="Levels below the depth limit are shown as […] with the number of hidden folders and files.",
             wraplength=420,
             style="PanelMuted.TLabel",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        row += 1
 
         annotate_text = "Show file count and total size for each folder" if has_sizes else "Show file count for each folder"
-        ttk.Checkbutton(outer, text=annotate_text, variable=self.annotate_var).grid(row=4, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ttk.Checkbutton(outer, text=annotate_text, variable=self.annotate_var).grid(row=row, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        row += 1
 
         button_row = ttk.Frame(outer, style="Panel.TFrame")
-        button_row.grid(row=5, column=0, columnspan=2, sticky="e", pady=(18, 0))
+        button_row.grid(row=row, column=0, columnspan=2, sticky="e", pady=(18, 0))
         ttk.Button(button_row, text="Cancel", command=self.cancel, style="FilterGhost.TButton").pack(side="right")
         ttk.Button(button_row, text="Save as HTML...", command=lambda: self.accept("html"), style="Tool.TButton").pack(side="right", padx=(0, 8))
         ttk.Button(button_row, text="Save as text...", command=lambda: self.accept("text"), style="Tool.TButton").pack(side="right", padx=(0, 8))
@@ -1093,6 +1115,7 @@ class TreeExportDialog(tk.Toplevel):
             "include_files": self.include_files_var.get() == "files",
             "max_depth": max_depth,
             "annotate": bool(self.annotate_var.get()),
+            "checked_only": self.scope_var.get() == "checked",
         }
         self.destroy()
 
