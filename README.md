@@ -21,6 +21,9 @@ A small Tkinter desktop tool for browsing, filtering, and comparing CSV-based fi
 - Sessions (checked items, plates, filters, search) are saved automatically per file and offered for restore on re-import  
 - "Checked" toggle in the toolbar shows only checked items, with a live counter  
 - Hover tooltips explain the checkbox, plate, and compare icons  
+- "No hit" screen and the filter dialog explain the search scope (current folder vs. plated view)  
+- Keyboard: Space toggles checkboxes for the selected rows, Ctrl+A selects all rows, Ctrl+Space toggles checkboxes for the whole view  
+- HTML tree reports show recursive folder/file counts and sizes on every folder  
 - Tooltip on filter value fields explaining semicolon-separated value lists  
 - Comparison of two imports with highlights for new, missing, and changed items  
 - Export of the current view to CSV  

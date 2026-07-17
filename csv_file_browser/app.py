@@ -209,6 +209,9 @@ class FileBrowser(tk.Tk):
         self.details.bind("<Double-1>", self.open_details_item)
         self.details.bind("<Button-2>", self.show_details_context_menu)
         self.details.bind("<Button-3>", self.show_details_context_menu)
+        self.details.bind("<space>", self.on_details_space)
+        self.details.bind("<Control-space>", self.on_details_toggle_all)
+        self.details.bind("<Control-a>", self.on_details_select_all)
 
         detail_y = ttk.Scrollbar(self.details_frame, orient="vertical", command=self.on_detail_scroll)
         detail_x = ttk.Scrollbar(self.details_frame, orient="horizontal", command=self.details.xview)
@@ -238,13 +241,22 @@ class FileBrowser(tk.Tk):
         self.empty_state.place(relx=0, rely=0, relwidth=1, relheight=1)
 
         self.no_results_state = tk.Frame(self.details_frame, bg=COLORS["panel"])
+        self.no_results_hint_var = tk.StringVar(value="")
         tk.Label(
             self.no_results_state,
             text="No hit",
             bg=COLORS["panel"],
             fg=COLORS["muted"],
             font=("TkDefaultFont", 16, "bold"),
-        ).place(relx=0.5, rely=0.45, anchor="center")
+        ).place(relx=0.5, rely=0.4, anchor="center")
+        tk.Label(
+            self.no_results_state,
+            textvariable=self.no_results_hint_var,
+            bg=COLORS["panel"],
+            fg=COLORS["muted"],
+            font=("TkDefaultFont", 10),
+            justify="center",
+        ).place(relx=0.5, rely=0.5, anchor="center")
 
         ttk.Label(shell, textvariable=self.status_var, anchor="w", padding=(2, 10), style="Status.TLabel").pack(fill="x")
 
@@ -1194,7 +1206,7 @@ class FileBrowser(tk.Tk):
         if not self.entries:
             messagebox.showinfo("No file loaded", "Import a CSV or tree text file first.")
             return
-        dialog = ColumnFilterDialog(self, self.available_filter_columns(), self.column_filters)
+        dialog = ColumnFilterDialog(self, self.available_filter_columns(), self.column_filters, scope_hint=self.filter_scope_hint())
         self.wait_window(dialog)
         if dialog.result is None:
             return
@@ -1659,8 +1671,11 @@ class FileBrowser(tk.Tk):
         self.refresh_details()
 
     def set_selection_checked(self, checked):
+        self.set_iids_checked(self.details.selection(), checked)
+
+    def set_iids_checked(self, iids, checked):
         changed = False
-        for iid in self.details.selection():
+        for iid in iids:
             if iid in self.detail_folder_by_iid:
                 self.set_folder_checked_recursive(self.detail_folder_by_iid[iid], checked)
                 changed = True
@@ -1679,6 +1694,53 @@ class FileBrowser(tk.Tk):
         self.report_checked_status()
         if self.show_only_checked:
             self.refresh_details()
+
+    def iid_is_checked(self, iid):
+        if iid in self.detail_folder_by_iid:
+            return self.folder_check_state(self.detail_folder_by_iid[iid]) == "on"
+        entry = self.detail_entry_by_iid.get(iid)
+        return entry is not None and id(entry) in self.checked_file_entries
+
+    def on_details_space(self, event=None):
+        iids = [iid for iid in self.details.selection() if iid in self.detail_folder_by_iid or iid in self.detail_entry_by_iid]
+        if iids:
+            # Check everything unless the whole selection is already checked.
+            target = not all(self.iid_is_checked(iid) for iid in iids)
+            self.set_iids_checked(iids, target)
+        return "break"
+
+    def on_details_toggle_all(self, event=None):
+        # Operates on every item in the current filtered view, across pages.
+        items = self.detail_items
+        if not items:
+            return "break"
+
+        def item_checked(kind, payload):
+            if kind == "folder":
+                return self.folder_check_state(payload) == "on"
+            return id(payload) in self.checked_file_entries
+
+        target = not all(item_checked(kind, payload) for kind, payload in items)
+        for kind, payload in items:
+            if kind == "folder":
+                self.set_folder_checked_recursive(payload, target)
+            elif target:
+                self.checked_file_entries[id(payload)] = payload
+            else:
+                self.checked_file_entries.pop(id(payload), None)
+        self.invalidate_check_states()
+        self.refresh_tree_labels()
+        self.update_visible_detail_check_icons()
+        self.report_checked_status()
+        if self.show_only_checked:
+            self.refresh_details()
+        return "break"
+
+    def on_details_select_all(self, event=None):
+        iids = [iid for iid in self.details.get_children() if iid != self.detail_loading_iid]
+        if iids:
+            self.details.selection_set(iids)
+        return "break"
 
     def clear_all_checks(self):
         if not self.checked_item_count():
@@ -1914,10 +1976,34 @@ class FileBrowser(tk.Tk):
         if not hasattr(self, "no_results_state"):
             return
         if active:
+            self.no_results_hint_var.set(self.no_results_hint())
             self.no_results_state.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.no_results_state.lift()
         else:
             self.no_results_state.place_forget()
+
+    def no_results_hint(self):
+        lines = []
+        if self.plated_folders:
+            names = ", ".join(sorted(display_name(path) for path in self.plated_folders))
+            plural = "s" if len(self.plated_folders) != 1 else ""
+            lines.append(f"Searched every file below the plated folder{plural} ({names}).")
+        else:
+            lines.append(f'No hit in "{display_name(self.current_folder)}" - only its direct items are searched.')
+            lines.append("Tip: click a folder's plate icon to search everything below it.")
+        if self.show_only_checked:
+            lines.append("The Checked filter is active - only checked items are shown.")
+        return "\n".join(lines)
+
+    def filter_scope_hint(self):
+        if self.plated_folders:
+            count = len(self.plated_folders)
+            plural = "s" if count != 1 else ""
+            return f"Filters and search apply to the plated view: every file below {count} plated folder{plural}."
+        return (
+            f'Filters and search apply to "{display_name(self.current_folder)}" and its direct items only. '
+            "Plate a folder to include everything below it."
+        )
 
     def render_detail_page(self, token=None):
         token = self.detail_render_token if token is None else token
