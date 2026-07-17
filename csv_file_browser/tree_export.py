@@ -301,9 +301,8 @@ def generate_tree_html(
     def append_folder(folder, depth):
         name = root_label if folder == root else display_name(folder)
         open_attr = " open" if depth <= 1 else ""
-        meta = ""
-        if annotate or folder == root:
-            meta = f'<span class="meta">{html.escape(folder_meta(folder))}</span>'
+        # Every folder shows its recursive folder/file counts (and size).
+        meta = f'<span class="meta">{html.escape(folder_meta(folder))}</span>'
         parts.append(f'<details class="folder"{open_attr} data-name="{html.escape(name.lower(), quote=True)}">')
         parts.append(f'<summary><span class="icon">\U0001f4c2</span>{html.escape(name)}{meta}</summary>')
         parts.append('<div class="children">')

@@ -487,7 +487,7 @@ class FilterListDialog(tk.Toplevel):
 
 
 class ColumnFilterDialog(tk.Toplevel):
-    def __init__(self, parent, columns, filters):
+    def __init__(self, parent, columns, filters, scope_hint=""):
         super().__init__(parent)
         self.title("Column Filters")
         set_window_icon(self)
@@ -495,6 +495,7 @@ class ColumnFilterDialog(tk.Toplevel):
         self.minsize(820, 460)
         self.result = None
         self.columns = columns
+        self.scope_hint = scope_hint
         self.filters = self.normalize_filters(filters)
         self.preset_var = tk.StringVar(value=FILTER_PRESET_NONE)
         self.rows = []
@@ -512,7 +513,7 @@ class ColumnFilterDialog(tk.Toplevel):
         outer = ttk.Frame(self, padding=(18, 16), style="Panel.TFrame")
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(1, weight=1)
+        outer.rowconfigure(2, weight=1)
 
         preset_shell = tk.Frame(outer, bg="#99f6e4", bd=0)
         preset_shell.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
@@ -532,8 +533,16 @@ class ColumnFilterDialog(tk.Toplevel):
         preset.grid(row=0, column=1, sticky="w")
         ttk.Button(preset_row, text="Apply preset", command=self.apply_preset, style="FilterPreset.TButton").grid(row=0, column=2, sticky="e", padx=(8, 0))
 
+        if self.scope_hint:
+            ttk.Label(
+                outer,
+                text=self.scope_hint,
+                wraplength=860,
+                style="PanelMuted.TLabel",
+            ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
         list_shell = tk.Frame(outer, bg="#bfdbfe", bd=0)
-        list_shell.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        list_shell.grid(row=2, column=0, columnspan=2, sticky="nsew")
         list_shell.columnconfigure(0, weight=1)
         list_shell.rowconfigure(0, weight=1)
         list_body = ttk.Frame(list_shell, style="Panel.TFrame", padding=(10, 8))
@@ -576,7 +585,7 @@ class ColumnFilterDialog(tk.Toplevel):
             self.add_filter_row(clause)
 
         button_row = ttk.Frame(outer, style="Panel.TFrame")
-        button_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        button_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         button_row.columnconfigure(0, weight=1)
         ttk.Button(button_row, text="Reset", command=self.clear, style="FilterGhost.TButton").grid(row=0, column=0, sticky="w")
         ttk.Button(button_row, text="Cancel", command=self.cancel, style="FilterGhost.TButton").grid(row=0, column=1, sticky="e", padx=(0, 8))
