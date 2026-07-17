@@ -14,7 +14,8 @@ A small Tkinter desktop tool for browsing, filtering, and comparing CSV-based fi
 - Import for tree-text files and tree exports copied from the app  
 - Folder navigation with detail view, search, filters, and sorting  
 - File properties window on double-click  
-- Folder tree copy actions for folders-only or folders-plus-files output  
+- Folder tree export via **Copy tree...** with folders-only or folders-plus-files output, a depth limit (`[…]` markers show hidden folder/file counts and sizes), optional per-folder counts, and clipboard, text-file, or interactive HTML output  
+- Multi-select in the detail view with tree copy, full-path copy, and CSV export for the selection  
 - Comparison of two imports with highlights for new, missing, and changed items  
 - Export of the current view to CSV  
 

@@ -8,11 +8,12 @@ try:
 except Exception:
     Image = ImageDraw = ImageFont = ImageTk = None
 
-from .dialogs import ColumnFilterDialog, CompareDetailWindow, CompareRootDialog, ImportDialog, SizeUnitDialog
+from .dialogs import ColumnFilterDialog, CompareDetailWindow, CompareRootDialog, ImportDialog, SizeUnitDialog, TreeExportDialog
 from .icons import load_icons, set_window_icon
 from .models import *
 from .parsing import detect_import_profile, file_md5, is_ftk_listing, read_csv_rows, read_tree_listing
 from .profile_store import load_import_profile, save_import_profile
+from .tree_export import compute_tree_stats, generate_tree_html, generate_tree_text
 from .utils import *
 
 class FileBrowser(tk.Tk):
@@ -236,8 +237,7 @@ class FileBrowser(tk.Tk):
         ttk.Label(shell, textvariable=self.status_var, anchor="w", padding=(2, 10), style="Status.TLabel").pack(fill="x")
 
         self.folder_context_menu = tk.Menu(self, tearoff=0)
-        self.folder_context_menu.add_command(label="Copy tree (folders only)", command=lambda: self.copy_context_folder_tree(False))
-        self.folder_context_menu.add_command(label="Copy tree (folders + files)", command=lambda: self.copy_context_folder_tree(True))
+        self.folder_context_menu.add_command(label="Copy tree...", command=self.open_context_folder_tree_dialog)
         self.folder_context_menu.add_separator()
         self.folder_context_menu.add_command(label="Copy direct child items", command=lambda: self.copy_context_folder_children(False))
         self.folder_context_menu.add_command(label="Copy all child items", command=lambda: self.copy_context_folder_children(True))
@@ -252,13 +252,19 @@ class FileBrowser(tk.Tk):
         self.item_context_menu.add_command(label="Export current view to CSV", command=self.export_current_view_csv)
 
         self.detail_folder_context_menu = tk.Menu(self, tearoff=0)
-        self.detail_folder_context_menu.add_command(label="Copy tree (folders only)", command=lambda: self.copy_context_folder_tree(False))
-        self.detail_folder_context_menu.add_command(label="Copy tree (folders + files)", command=lambda: self.copy_context_folder_tree(True))
+        self.detail_folder_context_menu.add_command(label="Copy tree...", command=self.open_context_folder_tree_dialog)
         self.detail_folder_context_menu.add_separator()
         self.detail_folder_context_menu.add_command(label="Copy direct child items", command=lambda: self.copy_context_folder_children(False))
         self.detail_folder_context_menu.add_command(label="Copy all child items", command=lambda: self.copy_context_folder_children(True))
         self.detail_folder_context_menu.add_separator()
         self.detail_folder_context_menu.add_command(label="Export current view to CSV", command=self.export_current_view_csv)
+
+        self.selection_context_menu = tk.Menu(self, tearoff=0)
+        self.selection_context_menu.add_command(label="Copy tree of selection...", command=self.open_selection_tree_dialog)
+        self.selection_context_menu.add_command(label="Copy full paths", command=self.copy_selected_full_paths)
+        self.selection_context_menu.add_separator()
+        self.selection_context_menu.add_command(label="Export selection to CSV", command=self.export_selected_csv)
+        self.selection_context_menu.add_command(label="Export current view to CSV", command=self.export_current_view_csv)
 
         self.details_context_menu = tk.Menu(self, tearoff=0)
         self.details_context_menu.add_command(label="Export current view to CSV", command=self.export_current_view_csv)
@@ -880,8 +886,7 @@ class FileBrowser(tk.Tk):
     def collect_folder_paths(self, entries):
         folders = {"/"}
         for entry in entries:
-            folder = entry.folder if entry.is_folder else entry.folder
-            self.add_folder_ancestors(folders, folder)
+            self.add_folder_ancestors(folders, entry.folder)
             if entry.is_folder:
                 folders.add(entry.folder)
         return folders
@@ -1437,48 +1442,36 @@ class FileBrowser(tk.Tk):
             yield from self.iter_tree_items(item)
 
     def on_tree_click(self, event):
-        info_path = self.tree_info_path_from_event(event)
-        if info_path:
-            self.tree.selection_set(info_path)
-            self.tree.focus(info_path)
-            self.show_compare_detail(info_path)
+        item = self.tree.identify_row(event.y)
+        if not item or self.is_dummy_iid(item) or self.tree.identify_column(event.x) != "#0":
+            return
+
+        # Only clicks on the item icon may toggle the plate; the expand
+        # indicator and the label keep their default Treeview behavior.
+        element = self.tree.identify_element(event.x, event.y)
+        if "image" not in element:
+            return
+
+        offset = event.x - self.tree_icon_left_edge(event.x, event.y)
+        if offset <= ICON_SIZE[0] + TREE_ICON_GAP // 2:
+            shift_pressed = bool(event.state & 0x0001)
+            self.toggle_plate(item, additive=shift_pressed)
             return "break"
 
-        item = self.tree.identify_row(event.y)
-        if not item or self.is_dummy_iid(item) or self.tree.identify_column(event.x) != "#0":
-            return
+        if item in self.compare_detail_by_path:
+            base_icon = self.folder_base_icon(item)
+            base_width = base_icon.width() if base_icon else 0
+            if offset >= base_width:
+                self.tree.selection_set(item)
+                self.tree.focus(item)
+                self.show_compare_detail(item)
+                return "break"
 
-        bbox = self.tree.bbox(item, "#0")
-        if not bbox:
-            return
-
-        x, _, _, _ = bbox
-        hitbox_left = x + PLATE_HITBOX_OFFSET
-        hitbox_right = hitbox_left + PLATE_HITBOX_WIDTH
-        if event.x < hitbox_left or event.x > hitbox_right:
-            return
-
-        shift_pressed = bool(event.state & 0x0001)
-        self.toggle_plate(item, additive=shift_pressed)
-        return "break"
-
-    def tree_info_path_from_event(self, event):
-        item = self.tree.identify_row(event.y)
-        if not item or self.is_dummy_iid(item) or self.tree.identify_column(event.x) != "#0":
-            return ""
-        if item not in self.compare_detail_by_path:
-            return ""
-
-        bbox = self.tree.bbox(item, "#0")
-        if not bbox:
-            return ""
-
-        base_icon = self.folder_base_icon(item)
-        base_width = base_icon.width() if base_icon else 0
-        icon_start = bbox[0] + PLATE_HITBOX_OFFSET
-        info_left = icon_start + base_width + TREE_ICON_GAP
-        info_right = info_left + DIFF_INFO_HITBOX_WIDTH
-        return item if info_left <= event.x <= info_right else ""
+    def tree_icon_left_edge(self, x, y):
+        left = x
+        while left > 0 and x - left < 128 and "image" in self.tree.identify_element(left - 1, y):
+            left -= 1
+        return left
 
     def toggle_plate(self, path, additive=False):
         if additive:
@@ -2468,6 +2461,15 @@ class FileBrowser(tk.Tk):
                 self.context_entry = None
                 self.details_context_menu.tk_popup(event.x_root, event.y_root)
             return
+
+        selection = self.details.selection()
+        if item in selection and len(selection) > 1:
+            self.details.focus(item)
+            self.context_folder_path = ""
+            self.context_entry = None
+            self.selection_context_menu.tk_popup(event.x_root, event.y_root)
+            return
+
         if item.startswith("folder:"):
             self.details.selection_set(item)
             self.details.focus(item)
@@ -2485,13 +2487,141 @@ class FileBrowser(tk.Tk):
         self.context_folder_path = ""
         self.item_context_menu.tk_popup(event.x_root, event.y_root)
 
-    def copy_context_folder_tree(self, include_files=True):
+    def open_context_folder_tree_dialog(self):
         if not self.context_folder_path:
             return
+        root = self.context_folder_path
+        self.open_tree_export_dialog(root, self.tree_data, self.folder_entries, self.tree_export_root_label(root), display_name(root))
 
-        text = self.generate_folder_tree_text(self.context_folder_path, include_files=include_files)
-        scope = "tree with files" if include_files else "folder tree"
-        self.copy_text(text, f"Copied {scope} for {display_name(self.context_folder_path)} to the clipboard.")
+    def open_selection_tree_dialog(self):
+        items = self.selected_export_items()
+        entries = [payload for kind, payload in items if kind == "file"]
+        folder_roots = [payload for kind, payload in items if kind == "folder"]
+        if not entries and not folder_roots:
+            messagebox.showinfo("Nothing selected", "Select one or more rows first.")
+            return
+
+        tree_data, folder_entries = self.structure_for_selection(entries, folder_roots)
+        root_label = f"{self.tree_export_root_label('/')} (selection)"
+        self.open_tree_export_dialog("/", tree_data, folder_entries, root_label, "the selection", selection=True)
+
+    def tree_export_root_label(self, root):
+        if root == "/" and self.current_file:
+            return os.path.splitext(os.path.basename(self.current_file))[0]
+        return display_name(root)
+
+    def open_tree_export_dialog(self, root, tree_data, folder_entries, root_label, scope_label, selection=False):
+        dialog = TreeExportDialog(self, scope_label, has_sizes=self.has_folder_sizes(), selection=selection)
+        self.wait_window(dialog)
+        options = dialog.result
+        if not options:
+            return
+
+        stats = compute_tree_stats(root, tree_data, folder_entries, self.entry_size_bytes)
+        render_options = {
+            "include_files": options["include_files"],
+            "max_depth": options["max_depth"],
+            "annotate": options["annotate"],
+            "show_sizes": self.has_folder_sizes(),
+            "entry_size": self.entry_size_bytes,
+            "stats": stats,
+        }
+
+        action = options["action"]
+        if action == "clipboard":
+            text = generate_tree_text(root, root_label, tree_data, folder_entries, **render_options)
+            self.copy_text(text, f"Copied tree for {scope_label} to the clipboard.")
+            return
+
+        if action == "html":
+            extension, filetypes = ".html", [("HTML", "*.html"), ("All files", "*.*")]
+        else:
+            extension, filetypes = ".txt", [("Text", "*.txt"), ("All files", "*.*")]
+        export_path = filedialog.asksaveasfilename(
+            defaultextension=extension,
+            initialfile=f"{self.safe_export_name(root_label)}_tree{extension}",
+            filetypes=filetypes,
+        )
+        if not export_path:
+            return
+
+        if action == "html":
+            content = generate_tree_html(
+                root,
+                root_label,
+                tree_data,
+                folder_entries,
+                source_name=os.path.basename(self.current_file or ""),
+                **render_options,
+            )
+        else:
+            content = generate_tree_text(root, root_label, tree_data, folder_entries, **render_options)
+
+        try:
+            with open(export_path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+        except OSError as exc:
+            messagebox.showerror("Export failed", str(exc))
+            return
+        self.status_var.set(f"Exported tree for {scope_label} to {export_path}.")
+
+    def safe_export_name(self, label):
+        cleaned = "".join(char if char.isalnum() or char in "._- " else "_" for char in label).strip().replace(" ", "_")
+        return cleaned or "tree"
+
+    def selected_export_items(self):
+        items = []
+        for iid in self.details.selection():
+            if iid in self.detail_folder_by_iid:
+                items.append(("folder", self.detail_folder_by_iid[iid]))
+            elif iid in self.detail_entry_by_iid:
+                items.append(("file", self.detail_entry_by_iid[iid]))
+        return items
+
+    def structure_for_selection(self, entries, folder_roots):
+        tree_data = {"/": set()}
+        folder_entries = {}
+        seen_files = set()
+
+        def ensure_local_folder(folder):
+            folder = normalize_path(folder) or "/"
+            if folder == "/":
+                return
+            parts = folder.strip("/").split("/")
+            current = ""
+            for part in parts:
+                current += "/" + part
+                parent = parent_path(current)
+                tree_data.setdefault(parent, set()).add(current)
+                tree_data.setdefault(current, set())
+
+        def add_file(entry):
+            if id(entry) in seen_files:
+                return
+            seen_files.add(id(entry))
+            ensure_local_folder(entry.folder)
+            folder_entries.setdefault(entry.folder, []).append(entry)
+
+        def add_subtree(folder):
+            ensure_local_folder(folder)
+            for entry in self.folder_entries.get(folder, []):
+                add_file(entry)
+            for child in self.tree_data.get(folder, set()):
+                add_subtree(child)
+
+        for folder in folder_roots:
+            add_subtree(folder)
+        for entry in entries:
+            add_file(entry)
+        return tree_data, folder_entries
+
+    def copy_selected_full_paths(self):
+        items = self.selected_export_items()
+        if not items:
+            return
+        lines = [payload + "/" if kind == "folder" else payload.full_path for kind, payload in items]
+        label = "path" if len(lines) == 1 else "paths"
+        self.copy_text("\n".join(lines), f"Copied {len(lines):,} {label} to the clipboard.")
 
     def copy_context_folder_children(self, recursive):
         if not self.context_folder_path:
@@ -2518,14 +2648,20 @@ class FileBrowser(tk.Tk):
             self.copy_text(self.context_entry.full_path, f"Copied full path for {self.context_entry.name}.")
 
     def export_current_view_csv(self):
-        if not self.detail_items:
-            messagebox.showinfo("Nothing to export", "The current view has no rows to export.")
+        self.export_items_csv(self.detail_items, "filtered_view", "The current view has no rows to export.")
+
+    def export_selected_csv(self):
+        self.export_items_csv(self.selected_export_items(), "selection", "Select one or more rows first.")
+
+    def export_items_csv(self, items, suffix, empty_message):
+        if not items:
+            messagebox.showinfo("Nothing to export", empty_message)
             return
 
         base_name = os.path.splitext(os.path.basename(self.current_file or "file_view"))[0] or "file_view"
         export_path = filedialog.asksaveasfilename(
             defaultextension=".csv",
-            initialfile=f"{base_name}_filtered_view.csv",
+            initialfile=f"{base_name}_{suffix}.csv",
             filetypes=[("CSV", "*.csv"), ("All files", "*.*")],
         )
         if not export_path:
@@ -2536,7 +2672,7 @@ class FileBrowser(tk.Tk):
             with open(export_path, "w", newline="", encoding="utf-8-sig") as handle:
                 writer = csv.writer(handle)
                 writer.writerow(columns)
-                for row_number, (kind, payload) in enumerate(self.detail_items, start=1):
+                for row_number, (kind, payload) in enumerate(items, start=1):
                     if kind == "folder":
                         path = payload
                         writer.writerow([row_number, "folder", display_name(path), path, *([""] * len(self.metadata_columns))])
@@ -2553,7 +2689,7 @@ class FileBrowser(tk.Tk):
             messagebox.showerror("Export failed", str(exc))
             return
 
-        self.status_var.set(f"Exported {len(self.detail_items):,} rows to {export_path}.")
+        self.status_var.set(f"Exported {len(items):,} rows to {export_path}.")
 
     def copy_text(self, text, status):
         self.clipboard_clear()
@@ -2575,32 +2711,6 @@ class FileBrowser(tk.Tk):
                 lines.append(entry.full_path)
 
         append_items(root)
-        return "\n".join(lines)
-
-    def generate_folder_tree_text(self, root, include_files=True):
-        root_name = display_name(root)
-        if root == "/" and self.current_file:
-            root_name = os.path.splitext(os.path.basename(self.current_file))[0]
-
-        lines = [root_name]
-
-        def append_children(folder, prefix=""):
-            folders = sorted(self.tree_data.get(folder, set()), key=lambda path: display_name(path).lower())
-            files = sorted(self.folder_entries.get(folder, []), key=lambda entry: entry.name.lower()) if include_files else []
-            children = [("folder", child) for child in folders] + [("file", entry) for entry in files]
-
-            for index, (kind, payload) in enumerate(children):
-                is_last = index == len(children) - 1
-                branch = "┗ " if is_last else "┣ "
-                child_prefix = prefix + ("    " if is_last else "┃   ")
-
-                if kind == "folder":
-                    lines.append(f"{prefix}{branch}📂 {display_name(payload)}")
-                    append_children(payload, child_prefix)
-                else:
-                    lines.append(f"{prefix}{branch}📜 {payload.name}")
-
-        append_children(root)
         return "\n".join(lines)
 
     def schedule_breadcrumb_update(self, path=None):
