@@ -198,8 +198,13 @@ main { padding:16px 24px 40px; }
 .logo { max-height:56px; max-width:220px; object-fit:contain; flex:0 0 auto; }
 .caseinfo { margin-top:6px; font-size:13px; }
 .caseinfo .desc { color:var(--muted); margin-top:2px; }
-details.file > summary { padding:1px 4px; border-radius:4px; }
+details.file > summary { padding:1px 4px; border-radius:4px; list-style:none; }
+details.file > summary::-webkit-details-marker { display:none; }
 details.file > summary:hover { background:#eef2f7; }
+.expander { display:inline-block; width:14px; height:14px; text-align:center; margin-right:6px; color:var(--muted); border:1px solid var(--border); border-radius:3px; font-size:11px; line-height:13px; vertical-align:1px; }
+details.file > summary .expander::before { content:"+"; }
+details.file[open] > summary .expander::before { content:"\\2212"; }
+.expander.empty { visibility:hidden; }
 table.props { border-collapse:collapse; margin:4px 0 8px 30px; font-size:12px; }
 table.props th { text-align:left; color:var(--muted); font-weight:600; padding:2px 14px 2px 0; vertical-align:top; white-space:nowrap; }
 table.props td { padding:2px 0; word-break:break-word; }
@@ -331,7 +336,8 @@ def generate_tree_html(
         rows = []
         if entry.full_path:
             rows.append(f"<tr><th>Full path</th><td>{html.escape(entry.full_path)}</td></tr>")
-        for column in metadata_columns or sorted(entry.metadata):
+        columns = metadata_columns if metadata_columns is not None else sorted(entry.metadata)
+        for column in columns:
             value = str(entry.metadata.get(column, "") or "").strip()
             if value:
                 rows.append(f"<tr><th>{html.escape(column)}</th><td>{html.escape(value)}</td></tr>")
@@ -374,11 +380,15 @@ def generate_tree_html(
                     label = f'<span class="icon">\U0001f4dc</span>{html.escape(entry.name)}{meta_span}'
                     detail_rows = file_detail_rows(entry) if file_details else ""
                     if detail_rows:
+                        # Files use a [+]/[-] expander so they are not mistaken
+                        # for collapsible folders.
                         parts.append(
                             f'<details class="file" data-name="{name_attr}">'
-                            f'<summary>{label}</summary>'
+                            f'<summary><span class="expander"></span>{label}</summary>'
                             f'<table class="props">{detail_rows}</table></details>'
                         )
+                    elif file_details:
+                        parts.append(f'<div class="file" data-name="{name_attr}"><span class="expander empty"></span>{label}</div>')
                     else:
                         parts.append(f'<div class="file" data-name="{name_attr}">{label}</div>')
             else:
@@ -398,10 +408,10 @@ def generate_tree_html(
     for _name in ancestors:
         parts.append("</div></details>")
 
-    title = f"Tree - {root_location}" if root_location else f"Tree - {root_label}"
     case_name = str(report.get("case", "") or "").strip()
-    if case_name:
-        title = f"{case_name} - {title}"
+    evidence = str(report.get("evidence", "") or "").strip()
+    folder_part = root_location or root_label
+    title = " - ".join(bit for bit in (case_name, evidence, "Tree", folder_part) if bit)
     subtitle_parts = []
     if root_location:
         subtitle_parts.append(f"Location: {root_location}")
@@ -428,7 +438,6 @@ def generate_tree_html(
     case_bits = []
     if case_name:
         case_bits.append(f"<strong>Case:</strong> {html.escape(case_name)}")
-    evidence = str(report.get("evidence", "") or "").strip()
     if evidence:
         case_bits.append(f"<strong>Evidence:</strong> {html.escape(evidence)}")
     description = str(report.get("description", "") or "").strip()
